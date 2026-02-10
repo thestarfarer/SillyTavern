@@ -6289,6 +6289,45 @@ function updateFeatureSupportFlags() {
     }
 }
 
+/**
+ * Updates the Claude OAuth status display in the UI.
+ */
+async function updateClaudeOAuthStatus() {
+    const statusText = $('#claude_oauth_status_text');
+    const statusIndicator = $('#claude_oauth_status_indicator');
+    const refreshBtn = $('#claude_oauth_refresh');
+    const deleteBtn = $('#claude_oauth_delete');
+
+    try {
+        const response = await fetch('/api/claude-oauth/state', {
+            headers: getRequestHeaders(),
+        });
+        const state = await response.json();
+
+        if (state.hasTokens) {
+            if (state.isExpired) {
+                statusText.text('Token expired').css('color', '#f0ad4e');
+                statusIndicator.css('color', '#f0ad4e').attr('title', 'Token expired');
+            } else {
+                const expiresDate = state.expiresAt ? new Date(state.expiresAt).toLocaleString() : 'unknown';
+                statusText.text(`Expires ${expiresDate}`).css('color', '#5cb85c');
+                statusIndicator.css('color', '#5cb85c').attr('title', 'OAuth configured');
+            }
+            refreshBtn.show();
+            deleteBtn.show();
+        } else {
+            statusText.text('Not configured').css('color', 'gray');
+            statusIndicator.css('color', 'gray').attr('title', 'Not configured');
+            refreshBtn.hide();
+            deleteBtn.hide();
+        }
+    } catch (error) {
+        console.error('Failed to get OAuth status:', error);
+        statusText.text('Error').css('color', 'var(--error)');
+        statusIndicator.css('color', 'red').attr('title', 'Error');
+    }
+}
+
 export function initOpenAI() {
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'proxy',
@@ -6891,4 +6930,67 @@ export function initOpenAI() {
     $('#openai_proxy_password_show').on('click', onProxyPasswordShowClick);
     $('#customize_additional_parameters').on('click', onCustomizeParametersClick);
     $('#openai_proxy_preset').on('change', onProxyPresetChange);
+
+    // Claude OAuth handlers
+    updateClaudeOAuthStatus();
+
+    $('#claude_oauth_import').on('click', async function () {
+        try {
+            const response = await fetch('/api/claude-oauth/import', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+            });
+            const data = await response.json();
+            if (data.success) {
+                toastr.success('OAuth tokens imported from claude-c');
+                updateClaudeOAuthStatus();
+            } else {
+                toastr.error(data.message || 'Failed to import OAuth tokens');
+            }
+        } catch (error) {
+            console.error('OAuth import error:', error);
+            toastr.error('Failed to import OAuth tokens');
+        }
+    });
+
+    $('#claude_oauth_refresh').on('click', async function () {
+        try {
+            const response = await fetch('/api/claude-oauth/refresh', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+            });
+            const data = await response.json();
+            if (data.success) {
+                toastr.success('OAuth token refreshed');
+                updateClaudeOAuthStatus();
+            } else {
+                toastr.error(data.message || 'Failed to refresh OAuth token');
+            }
+        } catch (error) {
+            console.error('OAuth refresh error:', error);
+            toastr.error('Failed to refresh OAuth token');
+        }
+    });
+
+    $('#claude_oauth_delete').on('click', async function () {
+        const confirm = await Popup.show.confirm('Delete Claude OAuth tokens?', 'This will remove the stored OAuth credentials. You can re-import them later.');
+        if (!confirm) return;
+
+        try {
+            const response = await fetch('/api/claude-oauth/tokens', {
+                method: 'DELETE',
+                headers: getRequestHeaders(),
+            });
+            const data = await response.json();
+            if (data.success) {
+                toastr.success('OAuth tokens deleted');
+                updateClaudeOAuthStatus();
+            } else {
+                toastr.error('Failed to delete OAuth tokens');
+            }
+        } catch (error) {
+            console.error('OAuth delete error:', error);
+            toastr.error('Failed to delete OAuth tokens');
+        }
+    });
 }

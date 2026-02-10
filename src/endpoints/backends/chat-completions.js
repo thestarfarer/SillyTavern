@@ -52,6 +52,7 @@ import {
 } from '../../prompt-converters.js';
 
 import { readSecret, SECRET_KEYS } from '../secrets.js';
+import { getOAuthManager, getOAuthBetaHeader } from '../claude-oauth.js';
 import {
     getTokenizerModel,
     getSentencepiceTokenizer,
@@ -204,11 +205,29 @@ function setJsonObjectFormat(bodyParams, messages, jsonSchema) {
  */
 async function sendClaudeRequest(request, response) {
     const apiUrl = new URL(request.body.reverse_proxy || API_CLAUDE).toString();
-    const apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.CLAUDE);
     const divider = '-'.repeat(process.stdout.columns);
 
-    if (!apiKey) {
-        console.warn(color.red(`Claude API key is missing.\n${divider}`));
+    // Determine auth method: OAuth takes priority over API key (unless using reverse proxy)
+    let authToken = null;
+    let useOAuth = false;
+
+    if (!request.body.reverse_proxy) {
+        // Try OAuth first
+        const oauthManager = getOAuthManager(request.user.directories);
+        authToken = await oauthManager.getValidAccessToken();
+        if (authToken) {
+            useOAuth = true;
+            console.debug('Using Claude OAuth authentication');
+        }
+    }
+
+    // Fall back to API key
+    if (!authToken) {
+        authToken = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.CLAUDE);
+    }
+
+    if (!authToken) {
+        console.warn(color.red(`Claude API key/OAuth not configured.\n${divider}`));
         return response.status(400).send({ error: true });
     }
 
@@ -255,6 +274,17 @@ async function sendClaudeRequest(request, response) {
         } else {
             delete requestBody.system;
         }
+
+        // Add OAuth identity block - required for OAuth authentication
+        if (useOAuth) {
+            const identityBlock = { type: 'text', text: 'You are a Claude agent, built on Anthropic\'s Claude Agent SDK.' };
+            if (Array.isArray(requestBody.system)) {
+                requestBody.system = [identityBlock, ...requestBody.system];
+            } else {
+                requestBody.system = [identityBlock];
+            }
+        }
+
         if (useTools) {
             betaHeaders.push('tools-2024-05-16');
             requestBody.tool_choice = { type: request.body.tool_choice };
@@ -339,9 +369,19 @@ async function sendClaudeRequest(request, response) {
             requestBody.output_config.effort = request.body.verbosity;
         }
 
+        // Add OAuth beta header if using OAuth
+        if (useOAuth) {
+            betaHeaders.push(getOAuthBetaHeader());
+        }
+
         if (betaHeaders.length) {
             additionalHeaders['anthropic-beta'] = betaHeaders.join(',');
         }
+
+        // Build auth headers based on auth method
+        const authHeaders = useOAuth
+            ? { 'Authorization': `Bearer ${authToken}` }
+            : { 'x-api-key': authToken };
 
         console.debug('Claude request:', requestBody);
 
@@ -352,7 +392,7 @@ async function sendClaudeRequest(request, response) {
             headers: {
                 'Content-Type': 'application/json',
                 'anthropic-version': '2023-06-01',
-                'x-api-key': apiKey,
+                ...authHeaders,
                 ...additionalHeaders,
             },
         });
