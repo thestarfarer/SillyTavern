@@ -5711,6 +5711,19 @@ async function onConnectButtonClick(e) {
         }
 
         if (!secret_state[config.key] && (!config.proxy || !oai_settings.reverse_proxy) && !config.keyless) {
+            // Claude OAuth: allow connection without API key if OAuth tokens exist
+            if (oai_settings.chat_completion_source === chat_completion_sources.CLAUDE) {
+                try {
+                    const oauthResp = await fetch('/api/claude-oauth/state', { headers: getRequestHeaders() });
+                    const oauthState = await oauthResp.json();
+                    if (oauthState.hasTokens) {
+                        startStatusLoading();
+                        saveSettingsDebounced();
+                        await getStatusOpen();
+                        return;
+                    }
+                } catch { /* fall through */ }
+            }
             console.log(`No secret key saved for ${oai_settings.chat_completion_source}`);
             return;
         }
