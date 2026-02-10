@@ -5620,6 +5620,35 @@ body:not(.movingUI) .drawer-content.maximized {
     text-align: center;
 }
 
+.claude_carousel_entry {
+    display: flex;
+    flex-direction: row;
+    column-gap: 10px;
+    align-items: center;
+    padding: 2px 0;
+}
+
+.claude_carousel_list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.claude_carousel_list:empty::before {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    content: "No models added";
+    font-weight: bolder;
+    width: 100%;
+    opacity: 0.8;
+    min-height: 2.5em;
+}
+
+.claude_carousel_entry.last_picked .claude_carousel_model_name {
+    color: var(--SmartThemeQuoteColor, #4CAF50);
+}
+
 .openai_logit_bias_form {
     display: flex;
     flex-direction: row;

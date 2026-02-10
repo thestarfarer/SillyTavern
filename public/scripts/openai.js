@@ -398,6 +398,8 @@ const default_settings = {
     personality_format: default_personality_format,
     openai_model: 'gpt-4-turbo',
     claude_model: 'claude-sonnet-4-5',
+    claude_model_carousel: [],
+    claude_model_carousel_enabled: false,
     google_model: 'gemini-2.5-pro',
     vertexai_model: 'gemini-2.5-pro',
     ai21_model: 'jamba-large',
@@ -1593,6 +1595,61 @@ function checkModerationError(data, { quiet = false } = {}) {
     }
 }
 
+/** @type {string|null} Last model picked by the carousel, for UI indicator */
+let lastCarouselPickedModel = null;
+/** @type {string|null} Cached carousel pick for the current request */
+let carouselCachedPick = null;
+
+/**
+ * Clears the cached carousel pick so the next call rolls again.
+ */
+export function clearCarouselCache() {
+    carouselCachedPick = null;
+}
+
+/**
+ * Returns the Claude model to use, applying weighted random carousel if enabled.
+ * The result is cached per request — call clearCarouselCache() to roll again.
+ * @param {ChatCompletionSettings} settings
+ * @returns {string}
+ */
+function getClaudeModelWithCarousel(settings) {
+    if (!settings.claude_model_carousel_enabled) {
+        return settings.claude_model;
+    }
+
+    if (carouselCachedPick) {
+        return carouselCachedPick;
+    }
+
+    const entries = settings.claude_model_carousel;
+    if (!Array.isArray(entries) || entries.length === 0) {
+        return settings.claude_model;
+    }
+
+    const totalWeight = entries.reduce((sum, e) => sum + e.weight, 0);
+    if (totalWeight <= 0) {
+        return settings.claude_model;
+    }
+
+    let random = Math.random() * totalWeight;
+    for (const entry of entries) {
+        random -= entry.weight;
+        if (random <= 0) {
+            carouselCachedPick = entry.model;
+            lastCarouselPickedModel = entry.model;
+            updateCarouselLastPicked(entry.model);
+            return entry.model;
+        }
+    }
+
+    const fallback = entries[entries.length - 1].model;
+    carouselCachedPick = fallback;
+    lastCarouselPickedModel = fallback;
+    updateCarouselLastPicked(fallback);
+    return fallback;
+}
+
 /**
  * Gets the API model for the selected chat completion source.
  * @param {ChatCompletionSettings} settings Chat completion settings
@@ -1603,7 +1660,7 @@ export function getChatCompletionModel(settings = null) {
     const source = settings.chat_completion_source;
     switch (source) {
         case chat_completion_sources.CLAUDE:
-            return settings.claude_model;
+            return getClaudeModelWithCarousel(settings);
         case chat_completion_sources.OPENAI:
             return settings.openai_model;
         case chat_completion_sources.MAKERSUITE:
@@ -2823,6 +2880,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
         signal = new AbortController().signal;
     }
 
+    clearCarouselCache();
     const model = getChatCompletionModel(oai_settings);
     const { generate_data, stream, canMultiSwipe } = await createGenerationParameters(oai_settings, model, type, messages, { jsonSchema });
     await eventSource.emit(event_types.CHAT_COMPLETION_SETTINGS_READY, generate_data);
@@ -4024,6 +4082,7 @@ function loadOpenAISettings(data, settings) {
     $('#bind_preset_to_connection').prop('checked', oai_settings.bind_preset_to_connection);
     $('#openai_external_category').toggle(oai_settings.show_external_models);
     $('.reverse_proxy_warning').toggle(oai_settings.reverse_proxy !== '');
+    renderClaudeModelCarousel();
 
     // Don't display Service Account JSON in textarea - it's stored in backend secrets
     $('#vertexai_service_account_json').val('');
@@ -4212,6 +4271,8 @@ export function getChatCompletionPreset(settings = oai_settings) {
     for (const [presetKey, [, settingsKey]] of Object.entries(settingsToUpdate)) {
         presetBody[presetKey] = settings[settingsKey];
     }
+    presetBody.claude_model_carousel = settings.claude_model_carousel;
+    presetBody.claude_model_carousel_enabled = settings.claude_model_carousel_enabled;
     return structuredClone(presetBody);
 }
 
@@ -6290,6 +6351,84 @@ function updateFeatureSupportFlags() {
 }
 
 /**
+ * Renders the Claude model carousel UI from current settings.
+ */
+function renderClaudeModelCarousel() {
+    const enabled = oai_settings.claude_model_carousel_enabled;
+    $('#claude_model_carousel_enabled').prop('checked', enabled);
+    $('#claude_model_carousel_controls').toggle(enabled);
+
+    const $source = $('#model_claude_select option');
+    const $target = $('#claude_carousel_model_select');
+    $target.empty();
+    $source.each(function () {
+        const val = $(this).val();
+        if (!val) return;
+        const opt = document.createElement('option');
+        opt.value = String(val);
+        opt.text = String($(this).text());
+        $target.append(opt);
+    });
+
+    const $list = $('#claude_carousel_list');
+    $list.empty();
+
+    const entries = oai_settings.claude_model_carousel;
+    if (!Array.isArray(entries)) return;
+
+    const totalWeight = entries.reduce((sum, e) => sum + e.weight, 0);
+
+    for (const entry of entries) {
+        if (!entry.id) entry.id = uuidv4();
+        const template = $('#claude_carousel_entry_template .claude_carousel_entry').clone();
+        template.data('id', entry.id);
+        template.find('.claude_carousel_model_name').text(entry.model);
+        template.find('.claude_carousel_weight_badge').text(entry.weight);
+        const probability = totalWeight > 0 ? ((entry.weight / totalWeight) * 100).toFixed(1) : '0.0';
+        template.find('.claude_carousel_probability').text(probability + '%');
+        if (entry.model === lastCarouselPickedModel) {
+            template.addClass('last_picked');
+        }
+        template.find('.claude_carousel_remove').on('click', function () {
+            const index = entries.findIndex(item => item.id === entry.id);
+            if (index >= 0) entries.splice(index, 1);
+            renderClaudeModelCarousel();
+            saveSettingsDebounced();
+        });
+        $list.append(template);
+    }
+
+    const headerModel = $('#claude_carousel_header_model');
+    if (enabled && lastCarouselPickedModel) {
+        headerModel.text('last: ' + lastCarouselPickedModel);
+    } else if (enabled && entries.length > 0) {
+        headerModel.text(`(${entries.length} models)`);
+    } else {
+        headerModel.text('');
+    }
+}
+
+/**
+ * Updates the "last picked" indicator in the carousel UI.
+ * @param {string} model
+ */
+function updateCarouselLastPicked(model) {
+    if (!model) {
+        $('#claude_carousel_last_picked').hide();
+        return;
+    }
+    $('#claude_carousel_last_picked_model').text(model);
+    $('#claude_carousel_header_model').text('last: ' + model);
+    $('#claude_carousel_last_picked').show();
+    $('.claude_carousel_entry').removeClass('last_picked');
+    $('.claude_carousel_entry').each(function () {
+        if ($(this).find('.claude_carousel_model_name').text() === model) {
+            $(this).addClass('last_picked');
+        }
+    });
+}
+
+/**
  * Updates the Claude OAuth status display in the UI.
  */
 async function updateClaudeOAuthStatus() {
@@ -6930,6 +7069,33 @@ export function initOpenAI() {
     $('#openai_proxy_password_show').on('click', onProxyPasswordShowClick);
     $('#customize_additional_parameters').on('click', onCustomizeParametersClick);
     $('#openai_proxy_preset').on('change', onProxyPresetChange);
+
+    // Claude Model Carousel handlers
+    $('#claude_model_carousel_enabled').on('change', function () {
+        oai_settings.claude_model_carousel_enabled = !!$(this).prop('checked');
+        renderClaudeModelCarousel();
+        saveSettingsDebounced();
+    });
+
+    $('#claude_carousel_add').on('click', function () {
+        const model = String($('#claude_carousel_model_select').val());
+        const weight = parseInt($('#claude_carousel_weight_input').val()) || 1;
+
+        if (!model) {
+            toastr.warning('Please select a model');
+            return;
+        }
+
+        if (oai_settings.claude_model_carousel.some(e => e.model === model)) {
+            toastr.warning('This model is already in the carousel');
+            return;
+        }
+
+        const clampedWeight = Math.max(1, Math.min(99, weight));
+        oai_settings.claude_model_carousel.push({ id: uuidv4(), model, weight: clampedWeight });
+        renderClaudeModelCarousel();
+        saveSettingsDebounced();
+    });
 
     // Claude OAuth handlers
     updateClaudeOAuthStatus();

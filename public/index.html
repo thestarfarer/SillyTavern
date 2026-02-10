@@ -3129,6 +3129,31 @@
                                     </optgroup>
                                 </select>
                             </div>
+                            <div class="inline-drawer wide100p">
+                                <div class="inline-drawer-toggle inline-drawer-header">
+                                    <b data-i18n="Model Carousel">Model Carousel</b>
+                                    <span id="claude_carousel_header_model" style="opacity: 0.7; font-size: 0.9em; margin-left: 8px;"></span>
+                                    <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
+                                </div>
+                                <div class="inline-drawer-content">
+                                    <label class="checkbox_label">
+                                        <input id="claude_model_carousel_enabled" type="checkbox" />
+                                        <span data-i18n="Enable">Enable</span>
+                                    </label>
+                                    <small data-i18n="Model Carousel Description">Randomly select a model per request based on weights. Higher weight = more likely.</small>
+                                    <div id="claude_model_carousel_controls" style="display: none;">
+                                        <div class="flex-container flexGap5 marginTopBot5">
+                                            <select id="claude_carousel_model_select" class="flex1 text_pole"></select>
+                                            <input id="claude_carousel_weight_input" type="number" class="text_pole" style="width: 60px;" min="1" max="99" value="1" placeholder="Wt" title="Weight (1-99)" />
+                                            <i id="claude_carousel_add" class="menu_button fa-solid fa-plus" title="Add model to carousel"></i>
+                                        </div>
+                                        <div id="claude_carousel_list" class="claude_carousel_list"></div>
+                                        <div id="claude_carousel_last_picked" class="marginTopBot5" style="display: none;">
+                                            <small><i class="fa-solid fa-dice"></i> Last picked: <strong id="claude_carousel_last_picked_model"></strong></small>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                             <div class="marginTop10">
                                 <div class="flex-container alignItemsCenter">
                                     <h4 class="margin0" data-i18n="Claude OAuth">Claude OAuth</h4>
@@ -7103,6 +7128,14 @@
                 <span class="tag_name"></span>
                 <i class="fa-solid fa-circle-xmark tag_remove"></i>
             </span>
+        </div>
+        <div id="claude_carousel_entry_template" class="template_element">
+            <div class="claude_carousel_entry">
+                <span class="claude_carousel_model_name flex1" style="overflow: hidden; text-overflow: ellipsis;"></span>
+                <span class="claude_carousel_weight_badge" style="min-width: 30px; text-align: center; font-weight: bold;"></span>
+                <span class="claude_carousel_probability" style="min-width: 45px; text-align: right; opacity: 0.7; font-size: 0.9em;"></span>
+                <i class="menu_button fa-solid fa-xmark claude_carousel_remove" title="Remove"></i>
+            </div>
         </div>
         <div id="openai_logit_bias_template" class="template_element">
             <div class="openai_logit_bias_form">
