@@ -1,4 +1,5 @@
 /* eslint-disable dot-notation */
+import crypto from 'node:crypto';
 import process from 'node:process';
 import util from 'node:util';
 import express from 'express';
@@ -199,6 +200,32 @@ function setJsonObjectFormat(bodyParams, messages, jsonSchema) {
 }
 
 /**
+ * Compute billing header from first user message text.
+ * @param {Array} messages Anthropic-format messages array
+ * @returns {string} Billing header string
+ */
+function computeBillingHeader(messages) {
+    const salt = '59cf53e54c78';
+    const version = '2.1.39';
+    let text = '';
+    for (const msg of messages) {
+        if (msg.role === 'user') {
+            text = typeof msg.content === 'string'
+                ? msg.content
+                : (Array.isArray(msg.content) ? (msg.content.find(b => b.type === 'text')?.text || '') : '');
+            break;
+        }
+    }
+    const c4  = text.length > 4  ? text[4]  : '0';
+    const c7  = text.length > 7  ? text[7]  : '0';
+    const c20 = text.length > 20 ? text[20] : '0';
+    const hash = crypto.createHash('sha256')
+        .update(salt + c4 + c7 + c20 + version)
+        .digest('hex');
+    return `x-anthropic-billing-header: cc_version=${version}.${hash.slice(0, 3)}; cc_entrypoint=cli; cch=00000;`;
+}
+
+/**
  * Sends a request to Claude API.
  * @param {express.Request} request Express request
  * @param {express.Response} response Express response
@@ -210,13 +237,16 @@ async function sendClaudeRequest(request, response) {
     // Determine auth method: OAuth takes priority over API key (unless using reverse proxy)
     let authToken = null;
     let useOAuth = false;
+    let oauthManager = null;
 
     if (!request.body.reverse_proxy) {
         // Try OAuth first
-        const oauthManager = getOAuthManager(request.user.directories);
+        oauthManager = getOAuthManager(request.user.directories);
         authToken = await oauthManager.getValidAccessToken();
         if (authToken) {
             useOAuth = true;
+            // Ensure profile is fetched (accountUuid + userId cached for metadata)
+            await oauthManager.fetchProfile(authToken);
             console.debug('Using Claude OAuth authentication');
         }
     }
@@ -277,14 +307,16 @@ async function sendClaudeRequest(request, response) {
             delete requestBody.system;
         }
 
-        // Add OAuth identity block - required for OAuth authentication
-        if (useOAuth) {
+        // Add OAuth billing header + identity block + metadata - required for OAuth authentication
+        if (useOAuth && oauthManager) {
+            const billingBlock = { type: 'text', text: computeBillingHeader(requestBody.messages) };
             const identityBlock = { type: 'text', text: 'You are a Claude agent, built on Anthropic\'s Claude Agent SDK.' };
             if (Array.isArray(requestBody.system)) {
-                requestBody.system = [identityBlock, ...requestBody.system];
+                requestBody.system = [billingBlock, identityBlock, ...requestBody.system];
             } else {
-                requestBody.system = [identityBlock];
+                requestBody.system = [billingBlock, identityBlock];
             }
+            requestBody.metadata = { user_id: oauthManager.buildMetadataUserId() };
         }
 
         if (useTools) {
@@ -387,16 +419,22 @@ async function sendClaudeRequest(request, response) {
 
         console.debug('Claude request:', requestBody);
 
+        const fetchHeaders = {
+            'Content-Type': 'application/json',
+            'anthropic-version': '2023-06-01',
+            ...authHeaders,
+            ...additionalHeaders,
+        };
+        if (useOAuth) {
+            fetchHeaders['User-Agent'] = 'claude-cli/2.1.39 (external, cli)';
+            fetchHeaders['x-app'] = 'cli';
+        }
+
         const generateResponse = await fetch(apiUrl + '/messages', {
             method: 'POST',
             signal: controller.signal,
             body: JSON.stringify(requestBody),
-            headers: {
-                'Content-Type': 'application/json',
-                'anthropic-version': '2023-06-01',
-                ...authHeaders,
-                ...additionalHeaders,
-            },
+            headers: fetchHeaders,
         });
 
         if (request.body.stream) {

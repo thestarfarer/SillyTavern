@@ -7,6 +7,7 @@
  * - Per-user token storage
  */
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -20,6 +21,7 @@ export const OAUTH_FILE = 'claude-oauth.json';
 // OAuth configuration - must match Claude Code
 const OAUTH_CONFIG = {
     TOKEN_URL: 'https://platform.claude.com/v1/oauth/token',
+    PROFILE_URL: 'https://api.anthropic.com/api/oauth/profile',
     CLIENT_ID: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
     SCOPES: 'user:profile user:inference user:sessions:claude_code',
     REFRESH_BUFFER_MS: 5 * 60 * 1000, // Refresh 5 minutes before expiry
@@ -32,6 +34,8 @@ const OAUTH_CONFIG = {
  * @property {string} refreshToken The OAuth refresh token
  * @property {number} expiresAt Token expiry timestamp in milliseconds
  * @property {string} [scopes] OAuth scopes
+ * @property {string} [userId] Persistent 64-char hex user ID
+ * @property {string} [accountUuid] Account UUID from OAuth profile
  */
 
 /**
@@ -75,6 +79,8 @@ export class ClaudeOAuthManager {
                 refreshToken: data.refreshToken,
                 expiresAt: data.expiresAt || 0,
                 scopes: data.scopes,
+                userId: data.userId,
+                accountUuid: data.accountUuid,
             };
         } catch (error) {
             console.warn(color.yellow('Failed to read Claude OAuth tokens:'), error.message);
@@ -87,11 +93,21 @@ export class ClaudeOAuthManager {
      * @param {OAuthTokens} tokens
      */
     writeTokens(tokens) {
+        // Merge with existing data to preserve userId/accountUuid across refreshes
+        let existing = {};
+        try {
+            if (fs.existsSync(this.filePath)) {
+                existing = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
+            }
+        } catch { /* ignore */ }
+
         const data = {
             accessToken: tokens.accessToken,
             refreshToken: tokens.refreshToken,
             expiresAt: tokens.expiresAt,
             scopes: tokens.scopes,
+            userId: tokens.userId || existing.userId,
+            accountUuid: tokens.accountUuid || existing.accountUuid,
         };
 
         writeFileAtomicSync(this.filePath, JSON.stringify(data, null, 2), 'utf-8');
@@ -205,6 +221,64 @@ export class ClaudeOAuthManager {
     }
 
     /**
+     * Fetches OAuth profile to get accountUuid, generates userId if missing.
+     * Caches both in the token file.
+     * @param {string} accessToken
+     * @returns {Promise<void>}
+     */
+    async fetchProfile(accessToken) {
+        const tokens = this.readTokens();
+        if (!tokens) return;
+
+        let changed = false;
+
+        // Generate persistent userId if missing
+        if (!tokens.userId) {
+            tokens.userId = crypto.randomBytes(32).toString('hex');
+            changed = true;
+        }
+
+        // Fetch accountUuid if missing
+        if (!tokens.accountUuid) {
+            try {
+                const response = await fetch(OAUTH_CONFIG.PROFILE_URL, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'anthropic-beta': OAUTH_CONFIG.BETA_HEADER,
+                    },
+                });
+                if (response.ok) {
+                    /** @type {any} */
+                    const data = await response.json();
+                    if (data?.account?.uuid) {
+                        tokens.accountUuid = data.account.uuid;
+                        changed = true;
+                    }
+                }
+            } catch (error) {
+                console.warn(color.yellow('Failed to fetch OAuth profile:'), error.message);
+            }
+        }
+
+        if (changed) {
+            this.writeTokens(tokens);
+        }
+    }
+
+    /**
+     * Builds metadata user_id string for API requests.
+     * Format: user_{userId}_account_{accountUuid}_session_{sessionUuid}
+     * @returns {string}
+     */
+    buildMetadataUserId() {
+        const tokens = this.readTokens();
+        const userId = tokens?.userId || '';
+        const accountUuid = tokens?.accountUuid || '';
+        const sessionId = uuidv4();
+        return `user_${userId}_account_${accountUuid}_session_${sessionId}`;
+    }
+
+    /**
      * Imports tokens from claude-c's storage (~/.claude/claude-c.json)
      * @returns {boolean} Whether import was successful
      */
@@ -230,6 +304,8 @@ export class ClaudeOAuthManager {
                 refreshToken: data.oauth.refreshToken,
                 expiresAt: data.oauth.expiresAt || 0,
                 scopes: data.oauth.scopes || OAUTH_CONFIG.SCOPES,
+                userId: data.userId,
+                accountUuid: data.accountUuid,
             };
 
             this.writeTokens(tokens);
