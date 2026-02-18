@@ -23,7 +23,7 @@ const OAUTH_CONFIG = {
     TOKEN_URL: 'https://platform.claude.com/v1/oauth/token',
     PROFILE_URL: 'https://api.anthropic.com/api/oauth/profile',
     CLIENT_ID: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
-    SCOPES: 'user:profile user:inference user:sessions:claude_code',
+    SCOPES: 'org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers',
     REFRESH_BUFFER_MS: 5 * 60 * 1000, // Refresh 5 minutes before expiry
     BETA_HEADER: 'oauth-2025-04-20',
 };
