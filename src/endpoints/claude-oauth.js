@@ -23,7 +23,7 @@ const OAUTH_CONFIG = {
     TOKEN_URL: 'https://platform.claude.com/v1/oauth/token',
     PROFILE_URL: 'https://api.anthropic.com/api/oauth/profile',
     CLIENT_ID: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
-    SCOPES: 'user:profile user:inference user:sessions:claude_code user:mcp_servers',
+    SCOPES: 'user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload',
     REFRESH_BUFFER_MS: 5 * 60 * 1000, // Refresh 5 minutes before expiry
     BETA_HEADER: 'oauth-2025-04-20',
 };
@@ -266,16 +266,28 @@ export class ClaudeOAuthManager {
     }
 
     /**
-     * Builds metadata user_id string for API requests.
-     * Format: user_{userId}_account_{accountUuid}_session_{sessionUuid}
+     * Gets or creates a persistent session ID stored in the token file.
+     * @returns {string}
+     */
+    getSessionId() {
+        const tokens = this.readTokens();
+        if (tokens?.sessionId) return tokens.sessionId;
+
+        const sessionId = uuidv4();
+        this.writeTokens({ ...tokens, sessionId });
+        return sessionId;
+    }
+
+    /**
+     * Builds metadata user_id JSON string for API requests.
      * @returns {string}
      */
     buildMetadataUserId() {
         const tokens = this.readTokens();
         const userId = tokens?.userId || '';
         const accountUuid = tokens?.accountUuid || '';
-        const sessionId = uuidv4();
-        return `user_${userId}_account_${accountUuid}_session_${sessionId}`;
+        const sessionId = this.getSessionId();
+        return JSON.stringify({ device_id: userId, account_uuid: accountUuid, session_id: sessionId });
     }
 
     /**

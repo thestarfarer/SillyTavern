@@ -206,7 +206,7 @@ function setJsonObjectFormat(bodyParams, messages, jsonSchema) {
  */
 function computeBillingHeader(messages) {
     const salt = '59cf53e54c78';
-    const version = '2.1.72';
+    const version = '2.1.89';
     let text = '';
     for (const msg of messages) {
         if (msg.role === 'user') {
@@ -426,8 +426,9 @@ async function sendClaudeRequest(request, response) {
             ...additionalHeaders,
         };
         if (useOAuth) {
-            fetchHeaders['User-Agent'] = 'claude-cli/2.1.72 (external, cli)';
+            fetchHeaders['User-Agent'] = 'claude-cli/2.1.89 (external, cli)';
             fetchHeaders['x-app'] = 'cli';
+            fetchHeaders['X-Claude-Code-Session-Id'] = oauthManager.getSessionId();
         }
 
         const generateResponse = await fetch(apiUrl + '/messages', {
