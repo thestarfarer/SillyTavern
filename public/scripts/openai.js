@@ -5346,7 +5346,7 @@ async function onModelChange() {
         if (oai_settings.max_context_unlocked) {
             $('#openai_max_context').attr('max', unlocked_max);
         }
-        else if (value.startsWith('claude-sonnet-4-5') || value.startsWith('claude-opus-4-6')) {
+        else if (/^claude-(sonnet-4-5|sonnet-4-6|sonnet-5|opus-4-6|opus-4-7|opus-4-8|opus-5|fable-5|mythos-5)/.test(value)) {
             $('#openai_max_context').attr('max', max_1mil);
         }
         else if (value == 'claude-2.1' || value.startsWith('claude-3') || value.startsWith('claude-opus') || value.startsWith('claude-haiku') || value.startsWith('claude-sonnet')) {
@@ -5905,8 +5905,12 @@ export function isImageInliningSupported() {
         // Claude
         'claude-3',
         'claude-opus-4',
+        'claude-opus-5',
         'claude-sonnet-4',
+        'claude-sonnet-5',
         'claude-haiku-4',
+        'claude-fable-5',
+        'claude-mythos-5',
         // Cohere
         'c4ai-aya-vision',
         'command-a-vision',

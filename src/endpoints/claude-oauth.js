@@ -242,9 +242,12 @@ export class ClaudeOAuthManager {
         if (!tokens.accountUuid) {
             try {
                 const response = await fetch(OAUTH_CONFIG.PROFILE_URL, {
+                    // Match the official client's profile fetch: Bearer +
+                    // Content-Type + Cache-Control, and NO anthropic-beta.
                     headers: {
                         'Authorization': `Bearer ${accessToken}`,
-                        'anthropic-beta': OAUTH_CONFIG.BETA_HEADER,
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache',
                     },
                 });
                 if (response.ok) {

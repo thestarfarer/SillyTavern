@@ -206,7 +206,7 @@ function setJsonObjectFormat(bodyParams, messages, jsonSchema) {
  */
 function computeBillingHeader(messages) {
     const salt = '59cf53e54c78';
-    const version = '2.1.89';
+    const version = '2.1.206';
     let text = '';
     for (const msg of messages) {
         if (msg.role === 'user') {
@@ -274,11 +274,21 @@ async function sendClaudeRequest(request, response) {
         const useTools = Array.isArray(request.body.tools) && request.body.tools.length > 0;
         const useSystemPrompt = Boolean(request.body.use_sysprompt);
         const convertedPrompt = convertClaudeMessages(request.body.messages, request.body.assistant_prefill, useSystemPrompt, useTools, getPromptNames(request));
-        const useThinking = /^claude-(3-7|opus-4|sonnet-4|haiku-4-5|opus-4-5|opus-4-6)/.test(request.body.model);
-        const useWebSearch = /^claude-(3-5|3-7|opus-4|sonnet-4|haiku-4-5|opus-4-5|opus-4-6)/.test(request.body.model) && Boolean(request.body.enable_web_search);
+        // Thinking + web search: every current model except the legacy claude-3.x
+        // basics. `opus-4`/`sonnet-4` prefixes already cover 4-x variants.
+        const useThinking = /^claude-(3-7|opus-4|opus-5|sonnet-4|sonnet-5|haiku-4-5|fable-5|mythos-5)/.test(request.body.model);
+        const useWebSearch = /^claude-(3-5|3-7|opus-4|opus-5|sonnet-4|sonnet-5|haiku-4-5|fable-5|mythos-5)/.test(request.body.model) && Boolean(request.body.enable_web_search);
+        // temp/top_p mutual-exclusivity models (send one or the other).
         const isLimitedSampling = /^claude-(opus-4-1|sonnet-4-5|haiku-4-5|opus-4-5|opus-4-6)/.test(request.body.model);
-        const useVerbosity = /^claude-(opus-4-5|opus-4-6)/.test(request.body.model);
-        const noPrefillModel = /^claude-(opus-4-6)/.test(request.body.model);
+        // Claude 5 reasoning models reject temperature/top_p/top_k outright (the API
+        // 400s on them as unsupported params; the official client never sends any of
+        // the three). Applies regardless of whether thinking is enabled.
+        const noSampling = /^claude-(opus-4-7|opus-4-8|opus-5|sonnet-5|fable-5|mythos-5)/.test(request.body.model);
+        // Effort/verbosity (output_config): the effort-capable models.
+        const useVerbosity = /^claude-(opus-4-5|opus-4-6|opus-4-7|opus-4-8|opus-5|sonnet-4-6|sonnet-5|fable-5|mythos-5)/.test(request.body.model);
+        // No assistant prefill: opus-4-6 (observed), and fable-5 (thinking can't be
+        // disabled, so an assistant prefill is never valid).
+        const noPrefillModel = /^claude-(opus-4-6|fable-5)/.test(request.body.model);
         let fixThinkingPrefill = false;
         // Add custom stop sequences
         const stopSequences = [];
@@ -368,6 +378,12 @@ async function sendClaudeRequest(request, response) {
             }
         }
 
+        if (noSampling) {
+            delete requestBody.temperature;
+            delete requestBody.top_p;
+            delete requestBody.top_k;
+        }
+
         const reasoningEffort = request.body.reasoning_effort;
         const budgetTokens = calculateClaudeBudgetTokens(requestBody.max_tokens, reasoningEffort, requestBody.stream);
 
@@ -403,9 +419,14 @@ async function sendClaudeRequest(request, response) {
             requestBody.output_config.effort = request.body.verbosity;
         }
 
-        // Add OAuth beta header if using OAuth
+        // Add OAuth beta headers if using OAuth. The official client sends
+        // oauth-2025-04-20 plus claude-code-20250219 (the latter on all
+        // non-haiku messages requests).
         if (useOAuth) {
             betaHeaders.push(getOAuthBetaHeader());
+            if (!/haiku/i.test(request.body.model)) {
+                betaHeaders.push('claude-code-20250219');
+            }
         }
 
         if (betaHeaders.length) {
@@ -426,9 +447,23 @@ async function sendClaudeRequest(request, response) {
             ...additionalHeaders,
         };
         if (useOAuth) {
-            fetchHeaders['User-Agent'] = 'claude-cli/2.1.89 (external, cli)';
+            fetchHeaders['User-Agent'] = 'claude-cli/2.1.206 (external, cli)';
             fetchHeaders['x-app'] = 'cli';
             fetchHeaders['X-Claude-Code-Session-Id'] = oauthManager.getSessionId();
+            // Accept + SDK telemetry headers, matching the official client on
+            // /v1/messages. X-Stainless-* are pure observability (Runtime reports
+            // "node" even under Bun, since Bun isn't detected upstream).
+            const stainlessOS = { linux: 'Linux', darwin: 'MacOS', win32: 'Windows', freebsd: 'FreeBSD', openbsd: 'OpenBSD' }[process.platform] || 'Unknown';
+            const stainlessArch = { x64: 'x64', arm64: 'arm64', ia32: 'x32' }[process.arch] || process.arch;
+            fetchHeaders['Accept'] = request.body.stream ? 'text/event-stream' : 'application/json';
+            fetchHeaders['X-Stainless-Lang'] = 'js';
+            fetchHeaders['X-Stainless-Package-Version'] = '0.94.0';
+            fetchHeaders['X-Stainless-Runtime'] = 'node';
+            fetchHeaders['X-Stainless-Runtime-Version'] = process.version;
+            fetchHeaders['X-Stainless-OS'] = stainlessOS;
+            fetchHeaders['X-Stainless-Arch'] = stainlessArch;
+            fetchHeaders['X-Stainless-Retry-Count'] = '0';
+            fetchHeaders['X-Stainless-Timeout'] = '600';
         }
 
         const generateResponse = await fetch(apiUrl + '/messages', {
