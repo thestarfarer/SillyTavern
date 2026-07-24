@@ -93,9 +93,11 @@ const API_OPENROUTER = 'https://openrouter.ai/api/v1';
 /**
  * Module-scoped Claude caching configuration values.
  */
-const cacheTTL = getConfigValue('claude.extendedTTL', false, 'boolean') ? '1h' : '5m';
-const enableSystemPromptCache = getConfigValue('claude.enableSystemPromptCache', false, 'boolean');
-const cachingAtDepth = (() => {
+// Config-file defaults for Claude prompt caching. Used as fallback when the
+// request doesn't carry per-request values (the UI now sends them per request).
+const extendedTTLConfig = getConfigValue('claude.extendedTTL', false, 'boolean');
+const enableSystemPromptCacheConfig = getConfigValue('claude.enableSystemPromptCache', false, 'boolean');
+const cachingAtDepthConfig = (() => {
     const value = getConfigValue('claude.cachingAtDepth', -1, 'number');
     return Number.isInteger(value) && value >= 0 ? value : -1;
 })();
@@ -233,6 +235,17 @@ function computeBillingHeader(messages) {
 async function sendClaudeRequest(request, response) {
     const apiUrl = new URL(request.body.reverse_proxy || API_CLAUDE).toString();
     const divider = '-'.repeat(process.stdout.columns);
+
+    // Per-request prompt-caching settings (from the UI), falling back to config.yaml.
+    const enableSystemPromptCache = request.body.claude_cache_system ?? enableSystemPromptCacheConfig;
+    const cacheTTL = (request.body.claude_cache_extended_ttl ?? extendedTTLConfig) ? '1h' : '5m';
+    const cachingAtDepth = (() => {
+        const v = request.body.claude_cache_depth;
+        if (v !== undefined && v !== null) {
+            return Number.isInteger(v) && v >= 0 ? v : -1;
+        }
+        return cachingAtDepthConfig;
+    })();
 
     // Determine auth method: OAuth takes priority over API key (unless using reverse proxy)
     let authToken = null;
@@ -488,8 +501,9 @@ async function sendClaudeRequest(request, response) {
             const responseText = generateResponseJson?.content?.[0]?.text || '';
             console.debug('Claude response:', generateResponseJson);
 
-            // Wrap it back to OAI format + save the original content
-            const reply = { choices: [{ 'message': { 'content': responseText } }], content: generateResponseJson.content };
+            // Wrap it back to OAI format + save the original content. Forward usage
+            // (incl. cache_read/cache_creation tokens) so the UI can show cache stats.
+            const reply = { choices: [{ 'message': { 'content': responseText } }], content: generateResponseJson.content, usage: generateResponseJson.usage };
             return response.send(reply);
         }
     } catch (error) {

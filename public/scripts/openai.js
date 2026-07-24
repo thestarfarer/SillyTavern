@@ -283,6 +283,9 @@ export const settingsToUpdate = {
     max_context_unlocked: ['#oai_max_context_unlocked', 'max_context_unlocked', true, false],
     openai_model: ['#model_openai_select', 'openai_model', false, true],
     claude_model: ['#model_claude_select', 'claude_model', false, true],
+    claude_cache_system: ['#claude_cache_system', 'claude_cache_system', true, false],
+    claude_cache_depth: ['#claude_cache_depth', 'claude_cache_depth', false, false],
+    claude_cache_extended_ttl: ['#claude_cache_extended_ttl', 'claude_cache_extended_ttl', true, false],
     openrouter_model: ['#model_openrouter_select', 'openrouter_model', false, true],
     openrouter_use_fallback: ['#openrouter_use_fallback', 'openrouter_use_fallback', true, true],
     openrouter_group_models: ['#openrouter_group_models', 'openrouter_group_models', false, true],
@@ -400,6 +403,9 @@ const default_settings = {
     claude_model: 'claude-sonnet-4-5',
     claude_model_carousel: [],
     claude_model_carousel_enabled: false,
+    claude_cache_system: false,
+    claude_cache_depth: -1,
+    claude_cache_extended_ttl: false,
     google_model: 'gemini-2.5-pro',
     vertexai_model: 'gemini-2.5-pro',
     ai21_model: 'jamba-large',
@@ -2672,6 +2678,10 @@ export async function createGenerationParameters(settings, model, type, messages
         generate_data.top_k = Number(settings.top_k_openai);
         generate_data.use_sysprompt = settings.use_sysprompt;
         generate_data.stop = getCustomStoppingStrings(); // Claude shouldn't have limits on stop strings.
+        // Prompt caching (per-request; backend falls back to config.yaml when unset).
+        generate_data.claude_cache_system = Boolean(settings.claude_cache_system);
+        generate_data.claude_cache_depth = Number(settings.claude_cache_depth);
+        generate_data.claude_cache_extended_ttl = Boolean(settings.claude_cache_extended_ttl);
         // Don't add a prefill on quiet gens (summarization) and when using continue prefill.
         if (type !== 'quiet' && !(type === 'continue' && settings.continue_prefill)) {
             generate_data.assistant_prefill = type === 'impersonate'
@@ -2914,6 +2924,16 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
                 tryParseStreamingError(response, rawData);
                 const parsed = JSON.parse(rawData);
 
+                // Claude cache stats: cache_read/creation arrive in message_start.usage,
+                // output_tokens accumulate in message_delta.usage. Update the readout live.
+                if (oai_settings.chat_completion_source === chat_completion_sources.CLAUDE) {
+                    const usage = parsed?.message?.usage ?? parsed?.usage;
+                    if (usage) {
+                        state.usage = { ...(state.usage || {}), ...usage };
+                        updateClaudeCacheReadout(state.usage);
+                    }
+                }
+
                 if (canMultiSwipe && Array.isArray(parsed?.choices) && parsed?.choices?.[0]?.index > 0) {
                     const swipeIndex = parsed.choices[0].index - 1;
                     // FIXME: state.reasoning should be an array to support multi-swipe
@@ -2945,6 +2965,10 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
             // Delay is required to allow the active message to be updated to
             // the one we are generating (happens right after sendOpenAIRequest)
             delay(1).then(() => saveLogprobsForActiveMessage(logprobs, null));
+        }
+
+        if (oai_settings.chat_completion_source === chat_completion_sources.CLAUDE && data?.usage) {
+            updateClaudeCacheReadout(data.usage);
         }
 
         return data;
@@ -6446,6 +6470,23 @@ function updateCarouselLastPicked(model) {
 }
 
 /**
+ * Updates the Claude prompt-cache readout from a response usage object.
+ * Anthropic usage: { input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens }.
+ * cache_read = prefix served from cache (cheap); cache_creation = tokens newly written to cache.
+ * @param {object} usage
+ */
+function updateClaudeCacheReadout(usage) {
+    if (!usage) return;
+    const read = usage.cache_read_input_tokens ?? 0;
+    const created = usage.cache_creation_input_tokens ?? 0;
+    const input = usage.input_tokens ?? 0;
+    const output = usage.output_tokens ?? 0;
+    $('#claude_cache_last_text').text(`cache read ${read} · write ${created} · in ${input} · out ${output}`);
+    $('#claude_cache_header_summary').text(`cache ${read}r/${created}w`);
+    $('#claude_cache_last').show();
+}
+
+/**
  * Updates the Claude OAuth status display in the UI.
  */
 async function updateClaudeOAuthStatus() {
@@ -7086,6 +7127,20 @@ export function initOpenAI() {
     $('#openai_proxy_password_show').on('click', onProxyPasswordShowClick);
     $('#customize_additional_parameters').on('click', onCustomizeParametersClick);
     $('#openai_proxy_preset').on('change', onProxyPresetChange);
+
+    // Claude prompt caching handlers
+    $('#claude_cache_system').on('change', function () {
+        oai_settings.claude_cache_system = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+    $('#claude_cache_depth').on('change', function () {
+        oai_settings.claude_cache_depth = Number($(this).val());
+        saveSettingsDebounced();
+    });
+    $('#claude_cache_extended_ttl').on('change', function () {
+        oai_settings.claude_cache_extended_ttl = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
 
     // Claude Model Carousel handlers
     $('#claude_model_carousel_enabled').on('change', function () {

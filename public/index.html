@@ -3160,6 +3160,41 @@
                                     </div>
                                 </div>
                             </div>
+                            <div class="inline-drawer wide100p">
+                                <div class="inline-drawer-toggle inline-drawer-header">
+                                    <b data-i18n="Prompt Caching">Prompt Caching</b>
+                                    <span id="claude_cache_header_summary" style="opacity: 0.7; font-size: 0.9em; margin-left: 8px;"></span>
+                                    <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
+                                </div>
+                                <div class="inline-drawer-content">
+                                    <label class="checkbox_label">
+                                        <input id="claude_cache_system" type="checkbox" />
+                                        <span data-i18n="Cache system prompt">Cache system prompt</span>
+                                    </label>
+                                    <small data-i18n="Cache System Prompt Description">Caches the system prompt + character card. Use only when they are static (no volatile macros / in-chat lorebooks in the prefix), or you will just pay for cache misses.</small>
+                                    <div class="flex-container flexGap5 marginTopBot5 alignItemsCenter">
+                                        <span data-i18n="Cache history at depth">Cache history at depth</span>
+                                        <select id="claude_cache_depth" class="text_pole" style="width: 80px;">
+                                            <option value="-1" data-i18n="Off">Off</option>
+                                            <option value="0">0</option>
+                                            <option value="2">2</option>
+                                            <option value="4">4</option>
+                                            <option value="6">6</option>
+                                            <option value="8">8</option>
+                                            <option value="10">10</option>
+                                        </select>
+                                    </div>
+                                    <small data-i18n="Cache Depth Description">Caches message history, leaving the last N turns uncached. Set deeper than any in-chat injection (e.g. an at-depth block) so its drift stays in the uncached tail.</small>
+                                    <label class="checkbox_label marginTop5">
+                                        <input id="claude_cache_extended_ttl" type="checkbox" />
+                                        <span data-i18n="Extended cache TTL (1h)">Extended cache TTL (1h)</span>
+                                    </label>
+                                    <small data-i18n="Extended TTL Description">1-hour cache lifetime instead of 5 minutes (2x write cost vs 1.25x, but survives longer gaps between turns).</small>
+                                    <div id="claude_cache_last" class="marginTopBot5" style="display: none;">
+                                        <small><i class="fa-solid fa-database"></i> Last request: <strong id="claude_cache_last_text"></strong></small>
+                                    </div>
+                                </div>
+                            </div>
                             <div class="marginTop10">
                                 <div class="flex-container alignItemsCenter">
                                     <h4 class="margin0" data-i18n="Claude OAuth">Claude OAuth</h4>
