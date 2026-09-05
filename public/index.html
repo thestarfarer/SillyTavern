@@ -2962,6 +2962,40 @@
                             </div>
                         </div>
                         <form id="openai_form" data-source="openai" action="javascript:void(null);" method="post" enctype="multipart/form-data">
+                            <div class="marginTopBot10">
+                                <h4>ChatGPT / Codex</h4>
+                                <small>Use your ChatGPT account's Codex access. When signed in, Codex takes priority over API keys and connects directly, ignoring reverse proxy settings.</small>
+                                <div id="codex_oauth_status" class="marginTopBot5" role="status">Not configured</div>
+                                <div class="flex-container flexGap5">
+                                    <button type="button" id="codex_oauth_login" class="menu_button">Sign in with ChatGPT</button>
+                                    <button type="button" id="codex_oauth_refresh" class="menu_button" style="display: none;">Refresh</button>
+                                    <button type="button" id="codex_oauth_delete" class="menu_button redWarning" style="display: none;">Delete</button>
+                                </div>
+                                <div id="codex_oauth_login_pending" class="marginTopBot5" style="display: none;" aria-live="polite">
+                                    <p>Open <a id="codex_oauth_verification" href="https://auth.openai.com/codex/device" target="_blank" rel="noopener noreferrer">ChatGPT device login</a> and enter this one-time code:</p>
+                                    <strong id="codex_oauth_code" class="userSelectAll"></strong>
+                                    <p>Waiting for sign-in. The code expires in 15 minutes.</p>
+                                    <button type="button" id="codex_oauth_cancel" class="menu_button">Cancel login</button>
+                                </div>
+                                <small>Device code login must be enabled in your ChatGPT security settings.</small>
+                                <details class="marginTopBot5">
+                                    <summary>Import an existing Codex login</summary>
+                                    <div class="flex-container flexGap5">
+                                        <button type="button" id="codex_oauth_import" class="menu_button" style="display: none;">Import from server</button>
+                                        <button type="button" id="codex_oauth_upload" class="menu_button">Upload auth.json</button>
+                                        <input type="file" id="codex_oauth_file" accept=".json,application/json" hidden>
+                                    </div>
+                                    <small>Import a ChatGPT login from Codex's auth.json. Imported credentials are managed separately; signing in here avoids sharing a rotating refresh token with Codex CLI.</small>
+                                </details>
+                                <label class="checkbox_label marginTop5">
+                                    <input id="codex_cache_enabled" type="checkbox" checked>
+                                    <span>Use per-chat prompt cache key</span>
+                                </label>
+                                <small>Helps reuse matching prompt prefixes across turns. Keep system prompts and earlier messages stable for more cache hits. Automatic caching remains active when this option is off.</small>
+                                <div id="codex_cache_last" class="marginTopBot5" role="status" style="display: none;"></div>
+                                <small>Codex uses its own generation limits. Temperature, top-p, penalties, stop strings, and response token limits are not sent.</small>
+                                <hr>
+                            </div>
                             <h4><span data-i18n="OpenAI API key">OpenAI API key</span></h4>
                             <div>
                                 <a id="openai_api_usage" href="https://platform.openai.com/account/usage" target="_blank">
@@ -2995,6 +3029,16 @@
                             <div>
                                 <h4 data-i18n="OpenAI Model">OpenAI Model</h4>
                                 <select id="model_openai_select">
+                                    <optgroup label="GPT-6">
+                                        <option value="gpt-6-astra">gpt-6-astra</option>
+                                    </optgroup>
+                                    <optgroup label="GPT-5.6">
+                                        <option value="gpt-5.6-sol">gpt-5.6-sol</option>
+                                        <option value="gpt-5.6">gpt-5.6 (Sol alias)</option>
+                                        <option value="gpt-5.6-terra">gpt-5.6-terra</option>
+                                        <option value="gpt-5.6-luna">gpt-5.6-luna</option>
+                                        <option value="gpt-5.6-cyber">gpt-5.6-cyber (requires Daybreak access)</option>
+                                    </optgroup>
                                     <optgroup label="GPT-5.2">
                                         <option value="gpt-5.2">gpt-5.2</option>
                                         <option value="gpt-5.2-2025-12-11">gpt-5.2-2025-12-11</option>

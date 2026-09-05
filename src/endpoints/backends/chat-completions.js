@@ -53,6 +53,8 @@ import {
 } from '../../prompt-converters.js';
 
 import { readSecret, SECRET_KEYS } from '../secrets.js';
+import { getCodexOAuthManager } from '../codex-oauth.js';
+import { sendCodexRequest, sendCodexStatus } from './codex.js';
 import { getOAuthManager, getOAuthBetaHeader } from '../claude-oauth.js';
 import {
     getTokenizerModel,
@@ -1774,6 +1776,7 @@ router.post('/status', async function (request, statusResponse) {
         let queryParams = {};
 
         if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENAI) {
+            if (getCodexOAuthManager(request.user.directories).readTokens()) return await sendCodexStatus(request, statusResponse);
             apiUrl = new URL(request.body.reverse_proxy || API_OPENAI).toString();
             apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.OPENAI);
             headers = {};
@@ -2179,6 +2182,7 @@ router.post('/generate', async function (request, response) {
         const isTextCompletion = Boolean(request.body.model && TEXT_COMPLETION_MODELS.includes(request.body.model)) || typeof request.body.messages === 'string';
 
         if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENAI) {
+            if (getCodexOAuthManager(request.user.directories).readTokens()) return await sendCodexRequest(request, response);
             apiUrl = new URL(request.body.reverse_proxy || API_OPENAI).toString();
             apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.OPENAI);
             headers = {};
