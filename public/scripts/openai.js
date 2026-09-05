@@ -4,6 +4,7 @@
 * https://github.com/CncAnon1/TavernAITurbo
 */
 import { Fuse, DOMPurify } from '../lib.js';
+import { hasCodexOAuth, initCodexOAuth, updateCodexOAuthStatus, updateCodexCacheReadout } from './codex-oauth.js';
 
 import {
     abortStatusCheck,
@@ -19,6 +20,7 @@ import {
     getMediaDisplay,
     getMediaIndex,
     getRequestHeaders,
+    getCurrentChatId,
     is_send_press,
     main_api,
     name1,
@@ -283,6 +285,7 @@ export const settingsToUpdate = {
     max_context_unlocked: ['#oai_max_context_unlocked', 'max_context_unlocked', true, false],
     openai_model: ['#model_openai_select', 'openai_model', false, true],
     claude_model: ['#model_claude_select', 'claude_model', false, true],
+    codex_cache_enabled: ['#codex_cache_enabled', 'codex_cache_enabled', true, false],
     claude_cache_system: ['#claude_cache_system', 'claude_cache_system', true, false],
     claude_cache_depth: ['#claude_cache_depth', 'claude_cache_depth', false, false],
     claude_cache_extended_ttl: ['#claude_cache_extended_ttl', 'claude_cache_extended_ttl', true, false],
@@ -403,6 +406,7 @@ const default_settings = {
     claude_model: 'claude-sonnet-4-5',
     claude_model_carousel: [],
     claude_model_carousel_enabled: false,
+    codex_cache_enabled: true,
     claude_cache_system: false,
     claude_cache_depth: -1,
     claude_cache_extended_ttl: false,
@@ -497,6 +501,7 @@ export let openai_settings;
 export let promptManager = null;
 
 async function validateReverseProxy() {
+    if (oai_settings.chat_completion_source === chat_completion_sources.OPENAI && hasCodexOAuth) return;
     if (!oai_settings.reverse_proxy) {
         return;
     }
@@ -1941,8 +1946,9 @@ function saveModelList(data) {
                 }));
         });
         // If the selected model is not in the list, revert to default
-        if (oai_settings.show_external_models) {
-            const model = model_list.findIndex((model) => model.id == oai_settings.openai_model) !== -1 ? oai_settings.openai_model : default_settings.openai_model;
+        if (oai_settings.show_external_models || hasCodexOAuth) {
+            $('#openai_external_category').show();
+            const model = model_list.findIndex((model) => model.id == oai_settings.openai_model) !== -1 ? oai_settings.openai_model : (hasCodexOAuth ? model_list[0]?.id : default_settings.openai_model);
             $('#model_openai_select').val(model).trigger('change');
         }
     }
@@ -2433,6 +2439,21 @@ function getReasoningEffort(settings = null, model = null) {
     settings = settings ?? oai_settings;
     model = model ?? getChatCompletionModel(settings);
 
+    if (settings.chat_completion_source === chat_completion_sources.OPENAI && hasCodexOAuth) {
+        const levels = model_list.find(item => item.id === model)?.supported_reasoning_levels?.map(level => level.effort);
+        if (levels?.length) {
+            if (settings.reasoning_effort === reasoning_effort_types.min) return levels[0];
+            if (settings.reasoning_effort === reasoning_effort_types.max) return levels[levels.length - 1];
+            return levels.includes(settings.reasoning_effort) ? settings.reasoning_effort : undefined;
+        }
+    }
+
+    if ([chat_completion_sources.OPENAI, chat_completion_sources.AZURE_OPENAI].includes(settings.chat_completion_source)
+        && /^(gpt-6-astra|gpt-5\.6(?:-(?:sol|terra|luna))?)$/.test(model)) {
+        if (settings.reasoning_effort === reasoning_effort_types.min) return model === 'gpt-6-astra' ? 'low' : 'none';
+        if (settings.reasoning_effort === reasoning_effort_types.max) return 'max';
+    }
+
     // These sources expect the effort as string.
     const reasoningEffortSources = [
         chat_completion_sources.OPENAI,
@@ -2495,6 +2516,9 @@ function getVerbosity(settings = null) {
     if (settings.verbosity === verbosity_levels.auto) {
         return undefined;
     }
+
+    if (settings.chat_completion_source === chat_completion_sources.OPENAI && hasCodexOAuth
+        && model_list.find(model => model.id === settings.openai_model)?.support_verbosity === false) return undefined;
 
     // TODO: Adjust verbosity based on model capabilities
     return settings.verbosity;
@@ -2631,6 +2655,17 @@ export async function createGenerationParameters(settings, model, type, messages
         'custom_prompt_post_processing': settings.custom_prompt_post_processing,
         'verbosity': getVerbosity(settings),
     };
+
+    if (settings.chat_completion_source === chat_completion_sources.OPENAI && settings.codex_cache_enabled) {
+        const chatId = getCurrentChatId();
+        if (chatId) {
+            generate_data.codex_cache_id = JSON.stringify([
+                selected_group ? 'group' : 'character',
+                selected_group || characters[this_chid]?.avatar || '',
+                chatId,
+            ]);
+        }
+    }
 
     if (settings.chat_completion_source === chat_completion_sources.AZURE_OPENAI) {
         generate_data.azure_base_url = settings.azure_base_url;
@@ -2845,7 +2880,7 @@ export async function createGenerationParameters(settings, model, type, messages
         }
     }
 
-    if (gptSources.includes(settings.chat_completion_source) && /gpt-5/.test(model)) {
+    if (gptSources.includes(settings.chat_completion_source) && /gpt-(5|6-astra)/.test(model)) {
         generate_data.max_completion_tokens = generate_data.max_tokens;
         delete generate_data.max_tokens;
         delete generate_data.logprobs;
@@ -2942,6 +2977,11 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
                     text += getStreamingReply(parsed, state);
                 }
 
+                if (oai_settings.chat_completion_source === chat_completion_sources.OPENAI && hasCodexOAuth && parsed.usage) {
+                    state.usage = parsed.usage;
+                    updateCodexCacheReadout(parsed.usage);
+                }
+
                 ToolManager.parseToolCalls(toolCalls, parsed, state.toolSignatures);
 
                 yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed), toolCalls: toolCalls, state: state };
@@ -2966,6 +3006,8 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
             // the one we are generating (happens right after sendOpenAIRequest)
             delay(1).then(() => saveLogprobsForActiveMessage(logprobs, null));
         }
+
+        if (oai_settings.chat_completion_source === chat_completion_sources.OPENAI && hasCodexOAuth) updateCodexCacheReadout(data.usage);
 
         if (oai_settings.chat_completion_source === chat_completion_sources.CLAUDE && data?.usage) {
             updateClaudeCacheReadout(data.usage);
@@ -3041,7 +3083,7 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, ov
             }
         });
         return data.choices?.[0]?.delta?.content ?? data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? '';
-    } else if ([chat_completion_sources.CUSTOM, chat_completion_sources.POLLINATIONS, chat_completion_sources.AIMLAPI, chat_completion_sources.MOONSHOT, chat_completion_sources.COMETAPI, chat_completion_sources.ELECTRONHUB, chat_completion_sources.NANOGPT, chat_completion_sources.ZAI, chat_completion_sources.SILICONFLOW, chat_completion_sources.CHUTES].includes(chat_completion_source)) {
+    } else if ([chat_completion_sources.OPENAI, chat_completion_sources.CUSTOM, chat_completion_sources.POLLINATIONS, chat_completion_sources.AIMLAPI, chat_completion_sources.MOONSHOT, chat_completion_sources.COMETAPI, chat_completion_sources.ELECTRONHUB, chat_completion_sources.NANOGPT, chat_completion_sources.ZAI, chat_completion_sources.SILICONFLOW, chat_completion_sources.CHUTES].includes(chat_completion_source)) {
         if (show_thoughts) {
             state.reasoning +=
                 data.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content ??
@@ -4104,7 +4146,7 @@ function loadOpenAISettings(data, settings) {
 
     $(`#settings_preset_openai option[value="${openai_setting_names[oai_settings.preset_settings_openai]}"]`).prop('selected', true);
     $('#bind_preset_to_connection').prop('checked', oai_settings.bind_preset_to_connection);
-    $('#openai_external_category').toggle(oai_settings.show_external_models);
+    $('#openai_external_category').toggle(oai_settings.show_external_models || hasCodexOAuth);
     $('.reverse_proxy_warning').toggle(oai_settings.reverse_proxy !== '');
     renderClaudeModelCarousel();
 
@@ -4185,6 +4227,14 @@ function setContinuePostfixControls() {
 }
 
 async function getStatusOpen() {
+    if (oai_settings.chat_completion_source === chat_completion_sources.OPENAI) {
+        try {
+            await updateCodexOAuthStatus();
+        } catch {
+            setOnlineStatus('no_connection');
+            return resultCheckStatus();
+        }
+    }
     const noValidateSources = [
         chat_completion_sources.CLAUDE,
         chat_completion_sources.AI21,
@@ -4244,7 +4294,7 @@ async function getStatusOpen() {
         data.azure_api_version = oai_settings.azure_api_version;
     }
 
-    const canBypass = (oai_settings.chat_completion_source === chat_completion_sources.OPENAI && oai_settings.bypass_status_check) || oai_settings.chat_completion_source === chat_completion_sources.CUSTOM;
+    const canBypass = (oai_settings.chat_completion_source === chat_completion_sources.OPENAI && !hasCodexOAuth && oai_settings.bypass_status_check) || oai_settings.chat_completion_source === chat_completion_sources.CUSTOM;
     if (canBypass) {
         setOnlineStatus(t`Status check bypassed`);
     }
@@ -4780,6 +4830,9 @@ function getMaxContextOpenAI(value) {
     if (oai_settings.max_context_unlocked) {
         return unlocked_max;
     }
+    else if (/^(gpt-6-astra|gpt-5\.6(?:-(?:sol|terra|luna))?)$/.test(value)) {
+        return 1050000;
+    }
     else if (value.startsWith('gpt-5')) {
         return max_400k;
     }
@@ -5129,6 +5182,7 @@ async function onModelChange() {
     }
 
     if ($(this).is('#model_openai_select')) {
+        if (!value && hasCodexOAuth) return;
         console.log('OpenAI model changed to', value);
         oai_settings.openai_model = value;
     }
@@ -5393,7 +5447,9 @@ async function onModelChange() {
     }
 
     if ([chat_completion_sources.AZURE_OPENAI, chat_completion_sources.OPENAI].includes(oai_settings.chat_completion_source)) {
-        $('#openai_max_context').attr('max', getMaxContextOpenAI(value));
+        const codexContext = oai_settings.chat_completion_source === chat_completion_sources.OPENAI && hasCodexOAuth
+            ? model_list.find(model => model.id === value)?.context_length : undefined;
+        $('#openai_max_context').attr('max', codexContext || getMaxContextOpenAI(value));
         oai_settings.openai_max_context = Math.min(oai_settings.openai_max_context, Number($('#openai_max_context').attr('max')));
         $('#openai_max_context').val(oai_settings.openai_max_context).trigger('input');
 
@@ -5726,6 +5782,21 @@ async function onConnectButtonClick(e) {
         }
     }
 
+    // Codex credentials connect independently of saved API keys.
+    if (oai_settings.chat_completion_source === chat_completion_sources.OPENAI) {
+        try {
+            await updateCodexOAuthStatus();
+            if (hasCodexOAuth) {
+                startStatusLoading();
+                await getStatusOpen();
+                return;
+            }
+        } catch (error) {
+            toastr.error(error.message);
+            return;
+        }
+    }
+
     // Other generic configs
     const config = apiSourceConfig[oai_settings.chat_completion_source];
     if (config) {
@@ -5763,7 +5834,7 @@ function toggleChatCompletionForms() {
         $('#model_claude_select').trigger('change');
     }
     else if (oai_settings.chat_completion_source == chat_completion_sources.OPENAI) {
-        if (oai_settings.show_external_models && (!Array.isArray(model_list) || model_list.length == 0)) {
+        if ((oai_settings.show_external_models || hasCodexOAuth) && (!Array.isArray(model_list) || model_list.length == 0)) {
             // Wait until the models list is loaded so that we could show a proper saved model
         }
         else {
@@ -6526,6 +6597,26 @@ async function updateClaudeOAuthStatus() {
 }
 
 export function initOpenAI() {
+    $('#codex_cache_enabled').on('change', function () {
+        oai_settings.codex_cache_enabled = Boolean($(this).prop('checked'));
+        saveSettingsDebounced();
+    });
+    eventSource.on(event_types.CHAT_CHANGED, () => $('#codex_cache_last').hide());
+    initCodexOAuth(async () => {
+        $('#openai_external_category').toggle(oai_settings.show_external_models || hasCodexOAuth);
+        if (oai_settings.chat_completion_source === chat_completion_sources.OPENAI) {
+            if (hasCodexOAuth) {
+                startStatusLoading();
+                await getStatusOpen();
+            } else {
+                model_list = [];
+                $('#openai_external_category').empty();
+                $('#model_openai_select').val(default_settings.openai_model).trigger('change');
+                setOnlineStatus('no_connection');
+                resultCheckStatus();
+            }
+        }
+    });
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'proxy',
         callback: runProxyCallback,
@@ -6757,7 +6848,7 @@ export function initOpenAI() {
 
     $('#openai_show_external_models').on('input', function () {
         oai_settings.show_external_models = !!$(this).prop('checked');
-        $('#openai_external_category').toggle(oai_settings.show_external_models);
+        $('#openai_external_category').toggle(oai_settings.show_external_models || hasCodexOAuth);
         saveSettingsDebounced();
     });
 

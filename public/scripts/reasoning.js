@@ -110,6 +110,7 @@ export function extractReasoningFromData(data, {
             if (!ignoreShowThoughts && !oai_settings.show_thoughts) break;
 
             switch (chatCompletionSource ?? oai_settings.chat_completion_source) {
+                case chat_completion_sources.OPENAI:
                 case chat_completion_sources.DEEPSEEK:
                     return data?.choices?.[0]?.message?.reasoning_content ?? '';
                 case chat_completion_sources.XAI:
