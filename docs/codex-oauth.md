@@ -121,3 +121,12 @@ locally and are not part of this branch's current files.
 
 A real account sign-in and model request are still required to verify live
 upstream compatibility.
+
+## Generation diagnostics
+
+Generation logs use a `[Codex request-id]` prefix and report the model, upstream
+HTTP status, content type, upstream request ID, completion time and token usage.
+Raw response bodies and authentication credentials are not logged. The adapter
+recognizes SSE from its body even if its content type is missing or incorrect,
+and also accepts completed Responses JSON. Structured upstream errors are shown
+in the chat error message.
