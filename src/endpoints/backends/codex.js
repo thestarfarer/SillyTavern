@@ -87,6 +87,100 @@ export async function* parseCodexEvents(stream) {
     }
 }
 
+// Only structured error text is surfaced; never log raw response bodies or credentials.
+function safeDiagnostic(value) {
+    return String(value || '').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+        .replace(/(?:eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]+|rt_[A-Za-z0-9_-]+)/g, '[redacted]')
+        .replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 1000);
+}
+
+function upstreamMessage(data) {
+    const error = data?.error || data?.response?.error;
+    return safeDiagnostic(typeof error === 'string' ? error : error?.message || data?.detail || data?.message);
+}
+
+function responseMetadata(response) {
+    return `HTTP ${response.status}; content-type=${safeDiagnostic(response.headers.get('content-type')) || 'missing'}; request-id=${safeDiagnostic(response.headers.get('x-request-id') || response.headers.get('cf-ray')) || 'missing'}`;
+}
+
+/** Read the wire format instead of assuming the Content-Type header is reliable. */
+export async function* readCodexResponseEvents(response) {
+    if (!response.body) throw new Error(`Codex returned an empty body (${responseMetadata(response)}).`);
+    const iterator = response.body[Symbol.asyncIterator]();
+    const decoder = new TextDecoder();
+    let prefix = '';
+    const buffered = [];
+    let ended = false;
+    try {
+        while (true) {
+            const next = await iterator.next();
+            if (next.done) { ended = true; break; }
+            buffered.push(next.value);
+            prefix += typeof next.value === 'string' ? next.value : decoder.decode(next.value, { stream: true });
+            const start = prefix.trimStart();
+            if (/^(?:(?:data|event|id|retry):|:|[<{[])/.test(start) || start.includes('\n') || prefix.length >= 1024) break;
+        }
+        if (/^\s*(?:(?:data|event|id|retry):|:)/.test(prefix) && response.ok) {
+            async function* replay() {
+                yield* buffered;
+                while (!ended) {
+                    const next = await iterator.next();
+                    if (next.done) break;
+                    yield next.value;
+                }
+            }
+            yield* parseCodexEvents(replay());
+            return;
+        }
+        // Accept completed JSON responses and surface structured upstream errors.
+        if (/^\s*(?:\[|\{)/.test(prefix)) {
+            if (prefix.length > 16 * 1024 * 1024) throw new Error('Codex JSON response exceeded the size limit.');
+            while (!ended) {
+                const next = await iterator.next();
+                if (next.done) break;
+                prefix += typeof next.value === 'string' ? next.value : decoder.decode(next.value, { stream: true });
+                if (prefix.length > 16 * 1024 * 1024) throw new Error('Codex JSON response exceeded the size limit.');
+            }
+            prefix += decoder.decode();
+            let data;
+            try { data = JSON.parse(prefix); } catch { throw new Error(`Codex returned invalid JSON (${responseMetadata(response)}).`); }
+            const message = upstreamMessage(data);
+            if (!response.ok || data.error || data.detail || data.type === 'error' || data.response?.error) {
+                throw new Error(`Codex: ${message || 'Upstream request failed'} (${responseMetadata(response)}).`);
+            }
+            const result = data.type === 'response.completed' ? data.response : data;
+            if (!result || typeof result !== 'object') throw new Error(`Codex returned JSON without a response (${responseMetadata(response)}).`);
+            if (result.status === 'failed' || result.status === 'incomplete') {
+                throw new Error(`Codex: ${message || result.incomplete_details?.reason || result.status} (${responseMetadata(response)}).`);
+            }
+            if (!Array.isArray(result.output) || (result.status !== 'completed' && data.type !== 'response.completed')) {
+                throw new Error(`Codex returned JSON without a completed response (${responseMetadata(response)}).`);
+            }
+            yield { type: 'response.created', response: result };
+            for (const [output_index, item] of result.output.entries()) {
+                if (item.type === 'function_call') yield { type: 'response.output_item.added', output_index, item };
+                if (item.type === 'message') {
+                    for (const part of item.content || []) {
+                        if (part.type === 'output_text') yield { type: 'response.output_text.delta', delta: part.text };
+                        if (part.type === 'refusal') yield { type: 'response.refusal.delta', delta: part.refusal };
+                    }
+                }
+                if (item.type === 'reasoning') {
+                    for (const part of item.summary || []) {
+                        if (part.type === 'summary_text') yield { type: 'response.reasoning_summary_text.delta', delta: part.text };
+                    }
+                }
+            }
+            yield { type: 'response.completed', response: result };
+            return;
+        }
+        const format = !prefix.trim() ? 'an empty body' : /^\s*</.test(prefix) ? 'HTML instead of a model response' : 'an unrecognized body';
+        throw new Error(`Codex returned ${format} (${responseMetadata(response)}).`);
+    } finally {
+        await iterator.return?.();
+    }
+}
+
 export class CodexResponseAdapter {
     constructor(model) {
         this.id = `chatcmpl-${crypto.randomUUID()}`;
@@ -201,25 +295,25 @@ export async function sendCodexRequest(request, response) {
     const abort = () => controller.abort();
     response.on('close', abort);
     let upstream;
+    const requestId = crypto.randomUUID();
+    const started = Date.now();
     try {
         const body = buildCodexRequest(request.body, request.user.directories.root);
         const adapter = new CodexResponseAdapter(body.model);
+        console.info(`[Codex ${requestId}] Generate model=${safeDiagnostic(body.model)} messages=${body.input.length} stream=${Boolean(request.body.stream)} cache=${Boolean(body.prompt_cache_key)}`);
         upstream = await getCodexOAuthManager(request.user.directories).apiRequest('/responses', {
             method: 'POST', signal: controller.signal,
-            headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+            headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', 'x-client-request-id': requestId },
             body: JSON.stringify(body),
         });
-        if (!upstream.ok) {
-            return response.status(upstream.status).json({ error: { message: `Codex request failed (HTTP ${upstream.status}). ${upstream.status === 401 ? 'Sign in again.' : upstream.status === 429 ? 'Your account is rate limited. Try again later.' : 'Check model access and request settings.'}` } });
-        }
-        if (!upstream.headers.get('content-type')?.includes('text/event-stream')) throw new Error('Codex returned an unexpected response format.');
+        console.info(`[Codex ${requestId}] Upstream ${responseMetadata(upstream)}`);
         if (request.body.stream) {
             response.setHeader('Content-Type', 'text/event-stream');
             response.setHeader('Cache-Control', 'no-cache');
             response.setHeader('X-Accel-Buffering', 'no');
             response.flushHeaders();
         }
-        for await (const event of parseCodexEvents(upstream.body)) {
+        for await (const event of readCodexResponseEvents(upstream)) {
             for (const chunk of adapter.consume(event)) {
                 if (request.body.stream && !response.write(`data: ${JSON.stringify(chunk)}\n\n`)) {
                     await once(response, 'drain', { signal: controller.signal });
@@ -228,13 +322,19 @@ export async function sendCodexRequest(request, response) {
             if (adapter.finished) break;
         }
         const completion = adapter.completion();
+        console.info(`[Codex ${requestId}] Completed in ${Date.now() - started}ms; input=${completion.usage?.prompt_tokens ?? 'unknown'} cached=${completion.usage?.prompt_tokens_details?.cached_tokens ?? 'unknown'} output=${completion.usage?.completion_tokens ?? 'unknown'}`);
         if (request.body.stream) response.end('data: [DONE]\n\n');
         else response.json(completion);
     } catch (error) {
-        if (controller.signal.aborted || response.destroyed) return;
-        const payload = { error: { message: error.message } };
+        if (controller.signal.aborted || response.destroyed) {
+            console.info(`[Codex ${requestId}] Request cancelled after ${Date.now() - started}ms`);
+            return;
+        }
+        const message = safeDiagnostic(error.message);
+        console.error(`[Codex ${requestId}] ${message}`);
+        const payload = { error: { message } };
         if (response.headersSent) response.end(`data: ${JSON.stringify(payload)}\n\n`);
-        else response.status(400).json(payload);
+        else response.status(upstream && !upstream.ok ? upstream.status : 502).json(payload);
     } finally {
         response.off('close', abort);
         controller.abort();
