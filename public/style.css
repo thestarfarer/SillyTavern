@@ -934,7 +934,8 @@ body .panelControlBar {
 }
 
 #rightSendForm>div:not(.mes_stop),
-#leftSendForm>div {
+#leftSendForm>div,
+#chat_provider_toggle {
     width: var(--bottomFormBlockSize);
     height: var(--bottomFormBlockSize);
     margin: 0;
@@ -948,7 +949,8 @@ body .panelControlBar {
 }
 
 #rightSendForm>div:hover,
-#leftSendForm>div:hover {
+#leftSendForm>div:hover,
+#chat_provider_toggle:hover {
     opacity: 1;
     filter: brightness(1.2);
 }
@@ -6327,4 +6329,23 @@ body:not(.movingUI) .drawer-content.maximized {
 .info-block.error {
     border-color: var(--error-color, #e87f7f);
     background-color: rgba(241, 163, 163, 0.2);
+}
+
+/* Keep the provider shortcut after the extensions menu, which is inserted at runtime. */
+#chat_provider_toggle {
+    order: 3;
+    position: relative;
+    background: transparent;
+    color: inherit;
+    font-size: inherit;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+#chat_provider_toggle .provider_initial {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    font: bold 0.35em sans-serif;
+    line-height: 1;
 }

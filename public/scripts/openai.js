@@ -6597,7 +6597,31 @@ async function updateClaudeOAuthStatus() {
     }
 }
 
+/** Reflect the active provider and the next action in the composer shortcut. */
+function updateChatProviderToggle() {
+    const source = main_api === 'openai' ? oai_settings.chat_completion_source : null;
+    const isClaude = source === chat_completion_sources.CLAUDE;
+    const isOpenAI = source === chat_completion_sources.OPENAI;
+    const label = isClaude ? t`Switch to OpenAI (current: Claude)`
+        : isOpenAI ? t`Switch to Claude (current: OpenAI)` : t`Switch to Claude`;
+    $('#chat_provider_toggle').attr({ title: label, 'aria-label': label });
+    $('#chat_provider_toggle .provider_initial').text(isClaude ? 'C' : isOpenAI ? 'O' : '');
+}
+
+/** Use the dropdown handlers so settings, connection and feature updates stay identical. */
+function toggleChatProvider() {
+    const target = main_api === 'openai' && oai_settings.chat_completion_source === chat_completion_sources.CLAUDE
+        ? chat_completion_sources.OPENAI : chat_completion_sources.CLAUDE;
+    if (main_api !== 'openai') $('#main_api').val('openai').trigger('change');
+    $('#chat_completion_source').val(target).trigger('change');
+}
+
 export function initOpenAI() {
+    $('#chat_provider_toggle').on('click', toggleChatProvider);
+    eventSource.on(event_types.CHATCOMPLETION_SOURCE_CHANGED, updateChatProviderToggle);
+    eventSource.on(event_types.MAIN_API_CHANGED, updateChatProviderToggle);
+    updateChatProviderToggle();
+
     $('#codex_cache_enabled').on('change', function () {
         oai_settings.codex_cache_enabled = Boolean($(this).prop('checked'));
         saveSettingsDebounced();
