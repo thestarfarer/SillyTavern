@@ -2,6 +2,7 @@
 import crypto from 'node:crypto';
 import { once } from 'node:events';
 import { getCodexOAuthManager } from '../codex-oauth.js';
+import { IMAGE_TOOL, IMAGE_TOOL_NAME, buildImageGenerationRequest, generatedImageDataUrl } from './inline-image-generation.js';
 
 // Protocol compatibility version, not the identity of this client.
 const CLIENT_VERSION = '0.153.4';
@@ -16,7 +17,7 @@ export function getCodexPromptCacheKey(userScope, chatId) {
 export function buildCodexRequest(body, userScope = '') {
     if (!Array.isArray(body.messages)) throw new Error('Codex requires chat messages.');
     if (!body.model) throw new Error('Select a Codex model first.');
-    if (Number(body.n) > 1) throw new Error('Codex supports one response per request. Set number of responses to 1.');
+    if (Number(body.n) > 1) throw new Error('Codex and image-enabled requests support one response at a time. Set number of responses to 1.');
     const input = [];
     for (const message of body.messages) {
         if (message.role === 'tool') {
@@ -28,14 +29,22 @@ export function buildCodexRequest(body, userScope = '') {
         const parts = typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : (message.content || []);
         const content = parts.map(part => {
             if (part.type === 'text') return { type: role === 'assistant' ? 'output_text' : 'input_text', text: part.text };
-            if (part.type === 'image_url' && role === 'user') return { type: 'input_image', image_url: part.image_url.url, detail: part.image_url.detail || 'auto' };
+            if (part.type === 'image_url' && ['user', 'assistant'].includes(role)) return { type: 'input_image', image_url: part.image_url.url, detail: part.image_url.detail || 'auto' };
             throw new Error(`Unsupported Codex content type: ${part.type}`);
         });
         if (message.name && content.length) {
             const text = content.find(part => 'text' in part);
             if (text) text.text = `${message.name}: ${text.text}`;
         }
-        if (content.length) input.push({ role, content });
+        if (role === 'assistant' && content.some(part => part.type === 'input_image')) {
+            const text = content.filter(part => part.type !== 'input_image');
+            if (text.length) input.push({ role, content: text });
+            // Generated attachments are visual context, not assistant output_text parts.
+            input.push({ role: 'user', content: [
+                { type: 'input_text', text: 'Image from an earlier assistant reply:' },
+                ...content.filter(part => part.type === 'input_image'),
+            ] });
+        } else if (content.length) input.push({ role, content });
         for (const call of message.tool_calls || []) {
             input.push({ type: 'function_call', call_id: call.id, name: call.function.name, arguments: call.function.arguments });
         }
@@ -57,6 +66,11 @@ export function buildCodexRequest(body, userScope = '') {
     if (body.verbosity && body.verbosity !== 'auto') request.text = { verbosity: body.verbosity };
     if (body.json_schema?.value) {
         request.text = { ...request.text, format: { type: 'json_schema', name: body.json_schema.name || 'response', schema: body.json_schema.value, strict: body.json_schema.strict ?? true } };
+    }
+    if (body.openai_image_generation === true) {
+        if (request.tools?.some(tool => tool.name === IMAGE_TOOL_NAME)) throw new Error('Image tool name conflicts with an extension tool.');
+        request.tools = [...(request.tools || []), structuredClone(IMAGE_TOOL)];
+        request.tool_choice ??= 'auto';
     }
     // Codex does not accept Chat Completions sampling, stop, or max_tokens fields.
     return request;
@@ -182,13 +196,16 @@ export async function* readCodexResponseEvents(response) {
 }
 
 export class CodexResponseAdapter {
-    constructor(model) {
+    constructor(model, imageGenerationEnabled = false) {
         this.id = `chatcmpl-${crypto.randomUUID()}`;
         this.model = model;
         this.created = Math.floor(Date.now() / 1000);
         this.text = '';
         this.reasoning = '';
         this.tools = new Map();
+        this.imageCalls = new Map();
+        this.images = [];
+        this.imageGenerationEnabled = imageGenerationEnabled;
         this.finished = false;
         this.finishReason = 'stop';
     }
@@ -215,6 +232,11 @@ export class CodexResponseAdapter {
                 break;
             case 'response.output_item.added':
                 if (event.item?.type === 'function_call') {
+                    if (this.imageGenerationEnabled && event.item.name === IMAGE_TOOL_NAME) {
+                        if (this.imageCalls.size >= 4) throw new Error('At most four images can be generated per response.');
+                        this.imageCalls.set(event.output_index, { ...event.item, arguments: event.item.arguments || '' });
+                        break;
+                    }
                     const tool = { index: this.tools.size, id: event.item.call_id, type: 'function', function: { name: event.item.name, arguments: event.item.arguments || '' } };
                     this.tools.set(event.output_index, tool);
                     chunks.push(this.chunk({ tool_calls: [structuredClone(tool)] }));
@@ -222,6 +244,11 @@ export class CodexResponseAdapter {
                 break;
             case 'response.output_item.done': {
                 if (event.item?.type !== 'function_call') break;
+                if (this.imageGenerationEnabled && event.item.name === IMAGE_TOOL_NAME) {
+                    if (!this.imageCalls.has(event.output_index)) this.consume({ ...event, type: 'response.output_item.added' });
+                    else this.imageCalls.get(event.output_index).arguments = event.item.arguments || '';
+                    break;
+                }
                 let tool = this.tools.get(event.output_index);
                 if (!tool) {
                     chunks.push(...this.consume({ ...event, type: 'response.output_item.added' }));
@@ -234,6 +261,11 @@ export class CodexResponseAdapter {
                 break;
             }
             case 'response.function_call_arguments.delta': {
+                const imageCall = this.imageCalls.get(event.output_index);
+                if (imageCall) {
+                    imageCall.arguments += event.delta || '';
+                    break;
+                }
                 const tool = this.tools.get(event.output_index);
                 if (!tool) throw new Error('Codex sent arguments for an unknown tool call.');
                 tool.function.arguments += event.delta || '';
@@ -267,6 +299,7 @@ export class CodexResponseAdapter {
     completion() {
         if (!this.finished) throw new Error('Codex stream ended before the response completed.');
         const message = { role: 'assistant', content: this.text };
+        if (this.images.length) message.images = this.images;
         if (this.reasoning) message.reasoning_content = this.reasoning;
         if (this.tools.size) message.tool_calls = [...this.tools.values()].map(({ index, ...tool }) => tool);
         return { id: this.id, object: 'chat.completion', created: this.created, model: this.model, choices: [{ index: 0, message, finish_reason: this.finishReason }], usage: this.usage };
@@ -290,24 +323,34 @@ export async function sendCodexStatus(request, response) {
     }
 }
 
-export async function sendCodexRequest(request, response) {
+export async function sendCodexRequest(request, response, transport = null) {
     const controller = new AbortController();
     const abort = () => controller.abort();
     response.on('close', abort);
     let upstream;
     const requestId = crypto.randomUUID();
     const started = Date.now();
+    const service = transport ? 'OpenAI' : 'Codex';
+    const manager = transport || getCodexOAuthManager(request.user.directories);
+    let imageHeartbeat;
     try {
         const body = buildCodexRequest(request.body, request.user.directories.root);
-        const adapter = new CodexResponseAdapter(body.model);
+        if (transport) {
+            if (request.body.max_tokens) body.max_output_tokens = request.body.max_tokens;
+            if (/^gpt-4/.test(body.model)) {
+                body.temperature = request.body.temperature;
+                body.top_p = request.body.top_p;
+            }
+        }
+        const adapter = new CodexResponseAdapter(body.model, request.body.openai_image_generation === true);
         const imageCount = body.input.reduce((count, item) => count + (item.content?.filter(part => part.type === 'input_image').length || 0), 0);
-        console.info(`[Codex ${requestId}] Generate model=${safeDiagnostic(body.model)} messages=${body.input.length} images=${imageCount} stream=${Boolean(request.body.stream)} cache=${Boolean(body.prompt_cache_key)}`);
-        upstream = await getCodexOAuthManager(request.user.directories).apiRequest('/responses', {
+        console.info(`[${service} ${requestId}] Generate model=${safeDiagnostic(body.model)} messages=${body.input.length} images=${imageCount} stream=${Boolean(request.body.stream)} cache=${Boolean(body.prompt_cache_key)}`);
+        upstream = await manager.apiRequest('/responses', {
             method: 'POST', signal: controller.signal,
             headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', 'x-client-request-id': requestId },
             body: JSON.stringify(body),
         });
-        console.info(`[Codex ${requestId}] Upstream ${responseMetadata(upstream)}`);
+        console.info(`[${service} ${requestId}] Upstream ${responseMetadata(upstream)}`);
         if (request.body.stream) {
             response.setHeader('Content-Type', 'text/event-stream');
             response.setHeader('Cache-Control', 'no-cache');
@@ -316,27 +359,64 @@ export async function sendCodexRequest(request, response) {
         }
         for await (const event of readCodexResponseEvents(upstream)) {
             for (const chunk of adapter.consume(event)) {
+                // Keep the response open until server-executed image tools have finished.
+                if (adapter.imageCalls.size && chunk.choices[0].finish_reason) continue;
                 if (request.body.stream && !response.write(`data: ${JSON.stringify(chunk)}\n\n`)) {
                     await once(response, 'drain', { signal: controller.signal });
                 }
             }
             if (adapter.finished) break;
         }
+        adapter.completion(); // Reject truncated streams before running any image tools.
+        if (adapter.imageCalls.size) {
+            // Validate every call before generating the first image.
+            const jobs = [...adapter.imageCalls.values()].map(call => buildImageGenerationRequest(call.arguments));
+            imageHeartbeat = setInterval(() => {
+                if (request.body.stream && !response.destroyed) response.write(': Generating image\n\n');
+            }, 15000);
+            for (const [index, job] of jobs.entries()) {
+                if (controller.signal.aborted) throw new Error('Image generation cancelled.');
+                console.info(`[${service} ${requestId}] Generating image ${index + 1}/${jobs.length}`);
+                const result = await manager.apiRequest('/images/generations', {
+                    method: 'POST', signal: controller.signal, size: 64 * 1024 * 1024,
+                    headers: { 'Content-Type': 'application/json', 'x-codex-image-turn-id': requestId },
+                    body: JSON.stringify(job),
+                });
+                console.info(`[${service} ${requestId}] Image upstream ${responseMetadata(result)}`);
+                let data;
+                try { data = await result.json(); } catch { throw new Error(`Image generation returned invalid JSON (${responseMetadata(result)}).`); }
+                if (!data || typeof data !== 'object') throw new Error('Image generation returned an invalid response.');
+                if (!result.ok || data.error) throw new Error(`Image generation: ${upstreamMessage(data) || 'Request failed'} (${responseMetadata(result)}).`);
+                if (!Array.isArray(data.data) || data.data.length !== 1) throw new Error('Image generation returned no image or an unexpected image count.');
+                const image = { type: 'image_url', image_url: { url: generatedImageDataUrl(data.data[0].b64_json) } };
+                adapter.images.push(image);
+                const delta = { images: [image] };
+                if (!adapter.text && index === 0) {
+                    adapter.text = 'Generated image.';
+                    delta.content = adapter.text;
+                }
+                if (request.body.stream && !response.write(`data: ${JSON.stringify(adapter.chunk(delta))}\n\n`)) {
+                    await once(response, 'drain', { signal: controller.signal });
+                }
+            }
+            if (request.body.stream) response.write(`data: ${JSON.stringify({ ...adapter.chunk({}, adapter.finishReason), usage: adapter.usage })}\n\n`);
+        }
         const completion = adapter.completion();
-        console.info(`[Codex ${requestId}] Completed in ${Date.now() - started}ms; input=${completion.usage?.prompt_tokens ?? 'unknown'} cached=${completion.usage?.prompt_tokens_details?.cached_tokens ?? 'unknown'} output=${completion.usage?.completion_tokens ?? 'unknown'}`);
+        console.info(`[${service} ${requestId}] Completed in ${Date.now() - started}ms; input=${completion.usage?.prompt_tokens ?? 'unknown'} cached=${completion.usage?.prompt_tokens_details?.cached_tokens ?? 'unknown'} output=${completion.usage?.completion_tokens ?? 'unknown'}`);
         if (request.body.stream) response.end('data: [DONE]\n\n');
         else response.json(completion);
     } catch (error) {
         if (controller.signal.aborted || response.destroyed) {
-            console.info(`[Codex ${requestId}] Request cancelled after ${Date.now() - started}ms`);
+            console.info(`[${service} ${requestId}] Request cancelled after ${Date.now() - started}ms`);
             return;
         }
         const message = safeDiagnostic(error.message);
-        console.error(`[Codex ${requestId}] ${message}`);
+        console.error(`[${service} ${requestId}] ${message}`);
         const payload = { error: { message } };
         if (response.headersSent) response.end(`data: ${JSON.stringify(payload)}\n\n`);
         else response.status(upstream && !upstream.ok ? upstream.status : 502).json(payload);
     } finally {
+        clearInterval(imageHeartbeat);
         response.off('close', abort);
         controller.abort();
         upstream?.body?.destroy();
