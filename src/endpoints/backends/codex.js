@@ -300,7 +300,8 @@ export async function sendCodexRequest(request, response) {
     try {
         const body = buildCodexRequest(request.body, request.user.directories.root);
         const adapter = new CodexResponseAdapter(body.model);
-        console.info(`[Codex ${requestId}] Generate model=${safeDiagnostic(body.model)} messages=${body.input.length} stream=${Boolean(request.body.stream)} cache=${Boolean(body.prompt_cache_key)}`);
+        const imageCount = body.input.reduce((count, item) => count + (item.content?.filter(part => part.type === 'input_image').length || 0), 0);
+        console.info(`[Codex ${requestId}] Generate model=${safeDiagnostic(body.model)} messages=${body.input.length} images=${imageCount} stream=${Boolean(request.body.stream)} cache=${Boolean(body.prompt_cache_key)}`);
         upstream = await getCodexOAuthManager(request.user.directories).apiRequest('/responses', {
             method: 'POST', signal: controller.signal,
             headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', 'x-client-request-id': requestId },
