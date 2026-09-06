@@ -111,6 +111,7 @@ import {
     loadProxyPresets,
     selected_proxy,
     initOpenAI,
+    applyPendingChatProvider,
 } from './scripts/openai.js';
 
 import {
@@ -574,6 +575,9 @@ export let online_status = 'no_connection';
 
 export let is_send_press = false; //Send generation
 export const isGenerating = () => (is_send_press || is_group_generating);
+// Includes response finalization, quiet requests and nested tool-call generations.
+let activeGenerationCalls = 0;
+export const isGenerationInProgress = () => activeGenerationCalls > 0 || isGenerating();
 
 let this_del_mes = -1;
 
@@ -4120,7 +4124,19 @@ function removeLastMessage() {
  * @param {boolean} dryRun Whether to actually generate a message or just assemble the prompt
  * @returns {Promise<any>} Returns a promise that resolves when the text is done generating.
  */
-export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0 } = {}, dryRun = false) {
+export async function Generate(type, options = {}, dryRun = false) {
+    if (dryRun) return generateInternal(type, options, dryRun);
+    activeGenerationCalls++;
+    try {
+        return await generateInternal(type, options, dryRun);
+    } finally {
+        activeGenerationCalls--;
+        applyPendingChatProvider();
+    }
+}
+
+/** @type {typeof Generate} */
+async function generateInternal(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0 } = {}, dryRun = false) {
     console.log('Generate entered');
     setGenerationProgress(0);
     generation_started = new Date();
