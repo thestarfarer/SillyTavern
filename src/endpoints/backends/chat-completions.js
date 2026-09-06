@@ -1780,6 +1780,15 @@ router.post('/status', async function (request, statusResponse) {
             apiUrl = new URL(request.body.reverse_proxy || API_OPENAI).toString();
             apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.OPENAI);
             headers = {};
+            if (request.body.openai_image_generation === true) {
+                // Image-enabled API-key requests use the same Responses adapter and image tool.
+                return await sendCodexRequest(request, response, {
+                    apiRequest: (endpoint, options) => fetch(`${apiUrl.replace(/\/$/, '')}${endpoint}`, {
+                        ...options, redirect: 'error',
+                        headers: { ...options.headers, Authorization: `Bearer ${apiKey}` },
+                    }),
+                });
+            }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENROUTER) {
             apiUrl = 'https://openrouter.ai/api/v1';
             apiKey = readSecret(request.user.directories, SECRET_KEYS.OPENROUTER);

@@ -355,6 +355,7 @@ export const settingsToUpdate = {
     vertexai_express_project_id: ['#vertexai_express_project_id', 'vertexai_express_project_id', false, true],
     squash_system_messages: ['#squash_system_messages', 'squash_system_messages', true, false],
     media_inlining: ['#openai_media_inlining', 'media_inlining', true, false],
+    openai_image_generation: ['#openai_image_generation', 'openai_image_generation', true, false],
     inline_image_quality: ['#openai_inline_image_quality', 'inline_image_quality', false, false],
     continue_prefill: ['#continue_prefill', 'continue_prefill', true, false],
     continue_postfix: ['#continue_postfix', 'continue_postfix', false, false],
@@ -464,6 +465,7 @@ const default_settings = {
     vertexai_express_project_id: '',
     squash_system_messages: false,
     media_inlining: true,
+    openai_image_generation: false,
     inline_image_quality: 'auto',
     bypass_status_check: false,
     continue_prefill: false,
@@ -2651,6 +2653,8 @@ export async function createGenerationParameters(settings, model, type, messages
         'reasoning_effort': getReasoningEffort(settings, model),
         'enable_web_search': Boolean(settings.enable_web_search),
         'request_images': Boolean(settings.request_images),
+        'openai_image_generation': settings.chat_completion_source === chat_completion_sources.OPENAI
+            && Boolean(settings.openai_image_generation) && !['quiet', 'impersonate'].includes(type),
         'request_image_resolution': String(settings.request_image_resolution),
         'request_image_aspect_ratio': String(settings.request_image_aspect_ratio),
         'custom_prompt_post_processing': settings.custom_prompt_post_processing,
@@ -3085,6 +3089,13 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, ov
         });
         return data.choices?.[0]?.delta?.content ?? data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? '';
     } else if ([chat_completion_sources.OPENAI, chat_completion_sources.CUSTOM, chat_completion_sources.POLLINATIONS, chat_completion_sources.AIMLAPI, chat_completion_sources.MOONSHOT, chat_completion_sources.COMETAPI, chat_completion_sources.ELECTRONHUB, chat_completion_sources.NANOGPT, chat_completion_sources.ZAI, chat_completion_sources.SILICONFLOW, chat_completion_sources.CHUTES].includes(chat_completion_source)) {
+        if (chat_completion_source === chat_completion_sources.OPENAI) {
+            const images = data.choices?.[0]?.delta?.images || [];
+            if (images.length) {
+                state.images ??= [];
+                state.images.push(...images.map(image => image.image_url?.url).filter(isDataURL));
+            }
+        }
         if (show_thoughts) {
             state.reasoning +=
                 data.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content ??
@@ -6975,6 +6986,11 @@ export function initOpenAI() {
 
     $('#squash_system_messages').on('input', function () {
         oai_settings.squash_system_messages = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#openai_image_generation').on('input', function () {
+        oai_settings.openai_image_generation = Boolean($(this).prop('checked'));
         saveSettingsDebounced();
     });
 
