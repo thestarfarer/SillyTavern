@@ -6342,10 +6342,16 @@ body:not(.movingUI) .drawer-content.maximized {
     flex-shrink: 0;
 }
 
-#chat_provider_toggle .provider_initial {
-    position: absolute;
-    bottom: 0;
-    right: 0;
-    font: bold 0.35em sans-serif;
-    line-height: 1;
+#chat_provider_toggle .provider_logo {
+    display: block;
+    width: 1em;
+    height: 1em;
+    background-color: currentColor;
+    -webkit-mask: url('img/claude-symbol.svg') center / contain no-repeat;
+    mask: url('img/claude-symbol.svg') center / contain no-repeat;
+}
+
+#chat_provider_toggle[data-provider="openai"] .provider_logo {
+    -webkit-mask-image: url('img/openai.svg');
+    mask-image: url('img/openai.svg');
 }

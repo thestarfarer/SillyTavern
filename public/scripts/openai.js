@@ -6604,8 +6604,7 @@ function updateChatProviderToggle() {
     const isOpenAI = source === chat_completion_sources.OPENAI;
     const label = isClaude ? t`Switch to OpenAI (current: Claude)`
         : isOpenAI ? t`Switch to Claude (current: OpenAI)` : t`Switch to Claude`;
-    $('#chat_provider_toggle').attr({ title: label, 'aria-label': label });
-    $('#chat_provider_toggle .provider_initial').text(isClaude ? 'C' : isOpenAI ? 'O' : '');
+    $('#chat_provider_toggle').attr({ title: label, 'aria-label': label, 'data-provider': isOpenAI ? 'openai' : 'claude' });
 }
 
 /** Use the dropdown handlers so settings, connection and feature updates stay identical. */
