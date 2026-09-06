@@ -22,6 +22,7 @@ import {
     getRequestHeaders,
     getCurrentChatId,
     is_send_press,
+    isGenerationInProgress,
     main_api,
     name1,
     name2,
@@ -6597,20 +6598,53 @@ async function updateClaudeOAuthStatus() {
     }
 }
 
+let pendingChatProvider = null;
+
 /** Reflect the active provider and the next action in the composer shortcut. */
 function updateChatProviderToggle() {
     const source = main_api === 'openai' ? oai_settings.chat_completion_source : null;
     const isClaude = source === chat_completion_sources.CLAUDE;
     const isOpenAI = source === chat_completion_sources.OPENAI;
-    const label = isClaude ? t`Switch to OpenAI (current: Claude)`
+    let label = isClaude ? t`Switch to OpenAI (current: Claude)`
         : isOpenAI ? t`Switch to Claude (current: OpenAI)` : t`Switch to Claude`;
-    $('#chat_provider_toggle').attr({ title: label, 'aria-label': label, 'data-provider': isOpenAI ? 'openai' : 'claude' });
+    if (pendingChatProvider) {
+        const name = getChatProviderName(pendingChatProvider);
+        label = t`${name} queued for the next response. Click to change or cancel.`;
+    }
+    $('#chat_provider_toggle').attr({ title: label, 'aria-label': label, 'data-provider': isOpenAI ? 'openai' : 'claude' })
+        .toggleClass('provider-switch-pending', Boolean(pendingChatProvider));
+}
+
+function getChatProviderName(source) {
+    return $('#chat_completion_source option').filter((_, option) => option.value === source).text().trim() || source;
+}
+
+function queueChatProvider(source) {
+    pendingChatProvider = main_api === 'openai' && source === oai_settings.chat_completion_source ? null : source;
+    // Keep the dropdown and all global settings on the in-flight provider.
+    $('#chat_completion_source').val(oai_settings.chat_completion_source);
+    updateChatProviderToggle();
+    if (pendingChatProvider) toastr.info(t`${getChatProviderName(source)} will be used for the next response.`);
+    else toastr.info(t`Provider switch cancelled.`);
+}
+
+/** Apply only after response parsing, saving and any nested tool calls have settled. */
+export function applyPendingChatProvider() {
+    if (!pendingChatProvider || isGenerationInProgress()) return;
+    const target = pendingChatProvider;
+    pendingChatProvider = null;
+    if (main_api !== 'openai') $('#main_api').val('openai').trigger('change');
+    $('#chat_completion_source').val(target).trigger('change');
 }
 
 /** Use the dropdown handlers so settings, connection and feature updates stay identical. */
 function toggleChatProvider() {
-    const target = main_api === 'openai' && oai_settings.chat_completion_source === chat_completion_sources.CLAUDE
-        ? chat_completion_sources.OPENAI : chat_completion_sources.CLAUDE;
+    const source = pendingChatProvider ?? (main_api === 'openai' ? oai_settings.chat_completion_source : null);
+    const target = source === chat_completion_sources.CLAUDE ? chat_completion_sources.OPENAI : chat_completion_sources.CLAUDE;
+    if (isGenerationInProgress()) {
+        queueChatProvider(target);
+        return;
+    }
     if (main_api !== 'openai') $('#main_api').val('openai').trigger('change');
     $('#chat_completion_source').val(target).trigger('change');
 }
@@ -6619,6 +6653,7 @@ export function initOpenAI() {
     $('#chat_provider_toggle').on('click', toggleChatProvider);
     eventSource.on(event_types.CHATCOMPLETION_SOURCE_CHANGED, updateChatProviderToggle);
     eventSource.on(event_types.MAIN_API_CHANGED, updateChatProviderToggle);
+    eventSource.on(event_types.GROUP_WRAPPER_FINISHED, applyPendingChatProvider);
     updateChatProviderToggle();
 
     $('#codex_cache_enabled').on('change', function () {
@@ -6851,6 +6886,13 @@ export function initOpenAI() {
     });
 
     $('#chat_completion_source').on('change', function () {
+        const target = String($(this).val());
+        if (isGenerationInProgress() && (target !== oai_settings.chat_completion_source || pendingChatProvider)) {
+            queueChatProvider(target);
+            return;
+        }
+        if (isGenerationInProgress()) return;
+        pendingChatProvider = null;
         cancelStatusCheck('Chat Completion source changed');
         model_list = [];
         oai_settings.chat_completion_source = String($(this).find(':selected').val());

@@ -6355,3 +6355,8 @@ body:not(.movingUI) .drawer-content.maximized {
     -webkit-mask-image: url('img/openai.svg');
     mask-image: url('img/openai.svg');
 }
+
+#chat_provider_toggle.provider-switch-pending {
+    outline: 1px dashed currentColor;
+    outline-offset: -3px;
+}
