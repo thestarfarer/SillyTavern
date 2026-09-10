@@ -6016,6 +6016,7 @@ function extractImagesFromData(data, { mainApi = null, chatCompletionSource = nu
                         return inlineData.map(x => `data:${x.mimeType};base64,${x.data}`).filter(isDataURL);
                     }
                 } break;
+                case chat_completion_sources.CLAUDE:
                 case chat_completion_sources.OPENAI:
                 case chat_completion_sources.OPENROUTER: {
                     const imageUrl = data?.choices[0]?.message?.images?.filter(x => x.type === 'image_url')?.map(x => x?.image_url?.url);

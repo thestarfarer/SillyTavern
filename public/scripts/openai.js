@@ -356,6 +356,7 @@ export const settingsToUpdate = {
     squash_system_messages: ['#squash_system_messages', 'squash_system_messages', true, false],
     media_inlining: ['#openai_media_inlining', 'media_inlining', true, false],
     openai_image_generation: ['#openai_image_generation', 'openai_image_generation', true, false],
+    claude_image_generation: ['#claude_image_generation', 'claude_image_generation', true, false],
     inline_image_quality: ['#openai_inline_image_quality', 'inline_image_quality', false, false],
     continue_prefill: ['#continue_prefill', 'continue_prefill', true, false],
     continue_postfix: ['#continue_postfix', 'continue_postfix', false, false],
@@ -466,6 +467,7 @@ const default_settings = {
     squash_system_messages: false,
     media_inlining: true,
     openai_image_generation: false,
+    claude_image_generation: false,
     inline_image_quality: 'auto',
     bypass_status_check: false,
     continue_prefill: false,
@@ -2655,6 +2657,8 @@ export async function createGenerationParameters(settings, model, type, messages
         'request_images': Boolean(settings.request_images),
         'openai_image_generation': settings.chat_completion_source === chat_completion_sources.OPENAI
             && Boolean(settings.openai_image_generation) && !['quiet', 'impersonate'].includes(type),
+        'claude_image_generation': settings.chat_completion_source === chat_completion_sources.CLAUDE
+            && Boolean(settings.claude_image_generation) && !['quiet', 'impersonate'].includes(type) && !jsonSchema,
         'request_image_resolution': String(settings.request_image_resolution),
         'request_image_aspect_ratio': String(settings.request_image_aspect_ratio),
         'custom_prompt_post_processing': settings.custom_prompt_post_processing,
@@ -3036,6 +3040,10 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, ov
     const show_thoughts = overrideShowThoughts ?? oai_settings.show_thoughts;
 
     if (chat_completion_source === chat_completion_sources.CLAUDE) {
+        if (data.type === 'sillytavern_images') {
+            state.images ??= [];
+            state.images.push(...(data.delta?.images || []).map(image => image.image_url?.url).filter(isDataURL));
+        }
         if (show_thoughts) {
             state.reasoning += data?.delta?.thinking || '';
         }
@@ -6991,6 +6999,11 @@ export function initOpenAI() {
 
     $('#openai_image_generation').on('input', function () {
         oai_settings.openai_image_generation = Boolean($(this).prop('checked'));
+        saveSettingsDebounced();
+    });
+
+    $('#claude_image_generation').on('input', function () {
+        oai_settings.claude_image_generation = Boolean($(this).prop('checked'));
         saveSettingsDebounced();
     });
 

@@ -2057,6 +2057,15 @@
                                             Lets the model generate pictures in its replies using GPT Image 2. Uses your Codex subscription when signed in, otherwise your OpenAI API connection.
                                         </div>
                                     </div>
+                                    <div class="range-block" data-source="claude">
+                                        <label for="claude_image_generation" class="checkbox_label widthFreeExpand">
+                                            <input id="claude_image_generation" type="checkbox" />
+                                            <span data-i18n="Generate images with ChatGPT">Generate images with ChatGPT</span>
+                                        </label>
+                                        <div class="flexBasis100p toggle-description justifyLeft" data-i18n="claude_image_generation_hint">
+                                            Lets Claude create pictures in its replies using GPT Image 2. Sign in to ChatGPT / Codex under the OpenAI provider first. Image prompts are sent to OpenAI and use your subscription's image allowance.
+                                        </div>
+                                    </div>
                                     <div id="request_images_block" class="range-block" data-source="makersuite,vertexai">
                                         <label for="openai_request_images" class="checkbox_label widthFreeExpand">
                                             <input id="openai_request_images" type="checkbox" />
