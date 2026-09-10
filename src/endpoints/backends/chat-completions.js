@@ -55,6 +55,7 @@ import {
 import { readSecret, SECRET_KEYS } from '../secrets.js';
 import { getCodexOAuthManager } from '../codex-oauth.js';
 import { sendCodexRequest, sendCodexStatus } from './codex.js';
+import { addClaudeImageTool, sendClaudeImageResponse } from './claude-image-generation.js';
 import { getOAuthManager, getOAuthBetaHeader } from '../claude-oauth.js';
 import {
     getTokenizerModel,
@@ -286,7 +287,13 @@ async function sendClaudeRequest(request, response) {
         const betaHeaders = useOAuth
             ? ['output-128k-2025-02-19']
             : ['output-128k-2025-02-19', 'context-1m-2025-08-07'];
-        const useTools = Array.isArray(request.body.tools) && request.body.tools.length > 0;
+        const imageGeneration = request.body.claude_image_generation === true
+            && !['quiet', 'impersonate'].includes(request.body.type) && !request.body.json_schema;
+        const imageManager = imageGeneration ? getCodexOAuthManager(request.user.directories) : null;
+        if (imageManager && !imageManager.getState().hasTokens) {
+            return response.status(400).json({ error: { message: 'Sign in to ChatGPT / Codex under the OpenAI provider to let Claude generate images.' } });
+        }
+        const useTools = imageGeneration || (Array.isArray(request.body.tools) && request.body.tools.length > 0);
         const useSystemPrompt = Boolean(request.body.use_sysprompt);
         const convertedPrompt = convertClaudeMessages(request.body.messages, request.body.assistant_prefill, useSystemPrompt, useTools, getPromptNames(request));
         // Thinking + web search: every current model except the legacy claude-3.x
@@ -346,11 +353,13 @@ async function sendClaudeRequest(request, response) {
 
         if (useTools) {
             betaHeaders.push('tools-2024-05-16');
-            requestBody.tool_choice = { type: request.body.tool_choice };
-            requestBody.tools = request.body.tools
+            requestBody.tool_choice = { type: request.body.tool_choice || 'auto' };
+            requestBody.tools = (request.body.tools || [])
                 .filter(tool => tool.type === 'function')
                 .map(tool => tool.function)
                 .map(fn => ({ name: fn.name, description: fn.description, input_schema: flattenSchema(fn.parameters, request.body.chat_completion_source) }));
+
+            if (imageGeneration) addClaudeImageTool(requestBody.tools);
 
             if (enableSystemPromptCache && requestBody.tools.length) {
                 requestBody.tools[requestBody.tools.length - 1].cache_control = { type: 'ephemeral', ttl: cacheTTL };
@@ -487,6 +496,10 @@ async function sendClaudeRequest(request, response) {
             body: JSON.stringify(requestBody),
             headers: fetchHeaders,
         });
+
+        if (imageGeneration) {
+            return await sendClaudeImageResponse(generateResponse, response, imageManager, controller, Boolean(request.body.stream));
+        }
 
         if (request.body.stream) {
             // Pipe remote SSE stream to Express response

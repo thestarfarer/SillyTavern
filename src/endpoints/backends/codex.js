@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import { once } from 'node:events';
 import { getCodexOAuthManager } from '../codex-oauth.js';
-import { IMAGE_TOOL, IMAGE_TOOL_NAME, buildImageGenerationRequest, generatedImageDataUrl } from './inline-image-generation.js';
+import { IMAGE_TOOL, IMAGE_TOOL_NAME, buildImageGenerationRequest, generateInlineImage } from './inline-image-generation.js';
 
 // Protocol compatibility version, not the identity of this client.
 const CLIENT_VERSION = '0.153.4';
@@ -377,18 +377,8 @@ export async function sendCodexRequest(request, response, transport = null) {
             for (const [index, job] of jobs.entries()) {
                 if (controller.signal.aborted) throw new Error('Image generation cancelled.');
                 console.info(`[${service} ${requestId}] Generating image ${index + 1}/${jobs.length}`);
-                const result = await manager.apiRequest('/images/generations', {
-                    method: 'POST', signal: controller.signal, size: 64 * 1024 * 1024,
-                    headers: { 'Content-Type': 'application/json', 'x-codex-image-turn-id': requestId },
-                    body: JSON.stringify(job),
-                });
-                console.info(`[${service} ${requestId}] Image upstream ${responseMetadata(result)}`);
-                let data;
-                try { data = await result.json(); } catch { throw new Error(`Image generation returned invalid JSON (${responseMetadata(result)}).`); }
-                if (!data || typeof data !== 'object') throw new Error('Image generation returned an invalid response.');
-                if (!result.ok || data.error) throw new Error(`Image generation: ${upstreamMessage(data) || 'Request failed'} (${responseMetadata(result)}).`);
-                if (!Array.isArray(data.data) || data.data.length !== 1) throw new Error('Image generation returned no image or an unexpected image count.');
-                const image = { type: 'image_url', image_url: { url: generatedImageDataUrl(data.data[0].b64_json) } };
+                const image = await generateInlineImage(manager, job, controller.signal, requestId,
+                    result => console.info(`[${service} ${requestId}] Image upstream ${responseMetadata(result)}`));
                 adapter.images.push(image);
                 const delta = { images: [image] };
                 if (!adapter.text && index === 0) {

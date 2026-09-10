@@ -1,4 +1,4 @@
-/** Server-executed image tool shared by Codex and OpenAI Responses requests. */
+/** Server-executed image tool shared by Claude, Codex and OpenAI requests. */
 export const IMAGE_TOOL_NAME = 'sillytavern_generate_image';
 
 export const IMAGE_TOOL = {
@@ -37,4 +37,26 @@ export function generatedImageDataUrl(base64) {
             : bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP' ? 'image/webp' : null;
     if (!mime) throw new Error('Image generation returned an unsupported image format.');
     return `data:${mime};base64,${base64}`;
+}
+
+/** Execute a validated image job using the caller's authenticated transport. */
+export async function generateInlineImage(manager, job, signal, requestId, onResponse = () => {}) {
+    signal.throwIfAborted();
+    const result = await manager.apiRequest('/images/generations', {
+        method: 'POST', signal, size: 64 * 1024 * 1024,
+        headers: { 'Content-Type': 'application/json', 'x-codex-image-turn-id': requestId },
+        body: JSON.stringify(job),
+    });
+    onResponse(result);
+    let data;
+    try { data = await result.json(); } catch { throw new Error(`Image generation returned invalid JSON (HTTP ${result.status}).`); }
+    if (!result.ok || data?.error) {
+        const error = data?.error;
+        const detail = String((typeof error === 'string' ? error : error?.message) || data?.detail || 'Check your image access and usage limits.')
+            .replace(/Bearer\s+\S+|sk-[A-Za-z0-9_-]+|rt_[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/gi, '[redacted]')
+            .replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 1000);
+        throw new Error(`Image generation failed (HTTP ${result.status}): ${detail}`);
+    }
+    if (!Array.isArray(data?.data) || data.data.length !== 1) throw new Error('Image generation returned no image or an unexpected image count.');
+    return { type: 'image_url', image_url: { url: generatedImageDataUrl(data.data[0].b64_json) } };
 }
