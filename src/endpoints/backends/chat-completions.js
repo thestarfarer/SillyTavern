@@ -359,7 +359,7 @@ async function sendClaudeRequest(request, response) {
                 .map(tool => tool.function)
                 .map(fn => ({ name: fn.name, description: fn.description, input_schema: flattenSchema(fn.parameters, request.body.chat_completion_source) }));
 
-            if (imageGeneration) addClaudeImageTool(requestBody.tools);
+            if (imageGeneration) addClaudeImageTool(requestBody.tools, request.body.claude_image_tool_description);
 
             if (enableSystemPromptCache && requestBody.tools.length) {
                 requestBody.tools[requestBody.tools.length - 1].cache_control = { type: 'ephemeral', ttl: cacheTTL };

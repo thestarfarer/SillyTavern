@@ -1,9 +1,11 @@
 /** Server-executed image tool shared by Claude, Codex and OpenAI requests. */
+import { DEFAULT_IMAGE_TOOL_DESCRIPTION } from '../../../public/scripts/image-tool.js';
+
 export const IMAGE_TOOL_NAME = 'sillytavern_generate_image';
 
 export const IMAGE_TOOL = {
     type: 'function', name: IMAGE_TOOL_NAME,
-    description: 'Generate a picture to display directly in your chat reply. Use when the user requests a picture, illustration, selfie, or visual depiction. Write a complete, detailed image prompt using the conversation context. The resulting picture is attached automatically; do not invent image URLs. This tool creates new images from text, not pixel-faithful edits of attachments.',
+    description: DEFAULT_IMAGE_TOOL_DESCRIPTION,
     strict: true,
     parameters: {
         type: 'object', additionalProperties: false,

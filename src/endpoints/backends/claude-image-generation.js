@@ -4,9 +4,10 @@ import { parseCodexEvents } from './codex.js';
 import { IMAGE_TOOL, IMAGE_TOOL_NAME, buildImageGenerationRequest, generateInlineImage } from './inline-image-generation.js';
 
 /** Add the server-owned tool without changing the user's other tools. */
-export function addClaudeImageTool(tools) {
+export function addClaudeImageTool(tools, description = '') {
     if (tools.some(tool => tool.name === IMAGE_TOOL_NAME)) throw new Error('Image tool name conflicts with an extension tool.');
-    tools.push({ name: IMAGE_TOOL_NAME, description: IMAGE_TOOL.description, input_schema: structuredClone(IMAGE_TOOL.parameters) });
+    if (typeof description !== 'string' || description.length > 8000) throw new Error('Image tool description must be at most 8000 characters.');
+    tools.push({ name: IMAGE_TOOL_NAME, description: description.trim() || IMAGE_TOOL.description, input_schema: structuredClone(IMAGE_TOOL.parameters) });
 }
 
 /** Intercept only our image calls; preserve Claude's native text, thinking and extension tools. */
@@ -25,12 +26,16 @@ export async function sendClaudeImageResponse(upstream, response, manager, contr
         if (calls.length > 4) throw new Error('At most four images can be generated per response.');
         // Validate every job before making the first billable request.
         const jobs = calls.map(call => buildImageGenerationRequest(call));
+        for (const [index, job] of jobs.entries()) {
+            console.info(`[Claude images ${requestId}] Claude called ${IMAGE_TOOL_NAME} (${index + 1}/${jobs.length})`, { prompt: job.prompt, size: job.size });
+        }
         if (streaming && jobs.length) heartbeat = setInterval(() => {
             if (!response.destroyed) response.write(': Generating image\n\n');
         }, 15000);
         for (const [index, job] of jobs.entries()) {
             console.info(`[Claude images ${requestId}] Generating image ${index + 1}/${jobs.length} using Codex`);
             const image = await generateInlineImage(manager, job, controller.signal, requestId);
+            console.info(`[Claude images ${requestId}] Image ${index + 1}/${jobs.length} received from GPT Image 2`);
             await onImage(image);
         }
     };
