@@ -1,0 +1,2 @@
+/** Shared default for the image tool offered to chat models. */
+export const DEFAULT_IMAGE_TOOL_DESCRIPTION = 'Generate a picture to display directly in your chat reply. Use when the user requests a picture, illustration, selfie, or visual depiction. Write a complete, detailed image prompt using the conversation context. The resulting picture is attached automatically; do not invent image URLs. This tool creates new images from text, not pixel-faithful edits of attachments.';

@@ -4,6 +4,7 @@
 * https://github.com/CncAnon1/TavernAITurbo
 */
 import { Fuse, DOMPurify } from '../lib.js';
+import { DEFAULT_IMAGE_TOOL_DESCRIPTION } from './image-tool.js';
 import { hasCodexOAuth, initCodexOAuth, updateCodexOAuthStatus, updateCodexCacheReadout } from './codex-oauth.js';
 
 import {
@@ -357,6 +358,7 @@ export const settingsToUpdate = {
     media_inlining: ['#openai_media_inlining', 'media_inlining', true, false],
     openai_image_generation: ['#openai_image_generation', 'openai_image_generation', true, false],
     claude_image_generation: ['#claude_image_generation', 'claude_image_generation', true, false],
+    claude_image_tool_description: ['#claude_image_tool_description', 'claude_image_tool_description', false, false],
     inline_image_quality: ['#openai_inline_image_quality', 'inline_image_quality', false, false],
     continue_prefill: ['#continue_prefill', 'continue_prefill', true, false],
     continue_postfix: ['#continue_postfix', 'continue_postfix', false, false],
@@ -468,6 +470,7 @@ const default_settings = {
     media_inlining: true,
     openai_image_generation: false,
     claude_image_generation: false,
+    claude_image_tool_description: DEFAULT_IMAGE_TOOL_DESCRIPTION,
     inline_image_quality: 'auto',
     bypass_status_check: false,
     continue_prefill: false,
@@ -2659,6 +2662,8 @@ export async function createGenerationParameters(settings, model, type, messages
             && Boolean(settings.openai_image_generation) && !['quiet', 'impersonate'].includes(type),
         'claude_image_generation': settings.chat_completion_source === chat_completion_sources.CLAUDE
             && Boolean(settings.claude_image_generation) && !['quiet', 'impersonate'].includes(type) && !jsonSchema,
+        'claude_image_tool_description': settings.chat_completion_source === chat_completion_sources.CLAUDE && settings.claude_image_generation
+            ? settings.claude_image_tool_description : undefined,
         'request_image_resolution': String(settings.request_image_resolution),
         'request_image_aspect_ratio': String(settings.request_image_aspect_ratio),
         'custom_prompt_post_processing': settings.custom_prompt_post_processing,
@@ -4788,9 +4793,16 @@ function onSettingsPresetChange() {
     const presetNameBefore = oai_settings.preset_settings_openai;
 
     const presetName = $('#settings_preset_openai').find(':selected').text();
-    oai_settings.preset_settings_openai = presetName;
+    if (isGenerationInProgress()) {
+        queueChatPreset(presetName);
+        return Promise.resolve();
+    }
+    pendingChatPreset = null;
+    pendingChatProvider = null;
+    const revision = ++chatPresetRevision;
+    updateChatProviderToggle();
 
-    const preset = structuredClone(openai_settings[openai_setting_names[oai_settings.preset_settings_openai]]);
+    const preset = structuredClone(openai_settings[openai_setting_names[presetName]]);
 
     migrateChatCompletionSettings(preset);
 
@@ -4798,7 +4810,7 @@ function onSettingsPresetChange() {
     const updateCheckbox = (selector, value) => $(selector).prop('checked', value).trigger('input', { source: 'preset' });
 
     // Allow subscribers to alter the preset before applying deltas
-    eventSource.emit(event_types.OAI_PRESET_CHANGED_BEFORE, {
+    return eventSource.emit(event_types.OAI_PRESET_CHANGED_BEFORE, {
         preset: preset,
         presetName: presetName,
         settingsToUpdate: settingsToUpdate,
@@ -4806,6 +4818,14 @@ function onSettingsPresetChange() {
         savePreset: saveOpenAIPreset,
         presetNameBefore: presetNameBefore,
     }).finally(async () => {
+        // A newer selection wins. A generation may also have started while an
+        // extension was preparing the preset, so check again before any writes.
+        if (revision !== chatPresetRevision) return;
+        if (isGenerationInProgress()) {
+            queueChatPreset(presetName);
+            return;
+        }
+        oai_settings.preset_settings_openai = presetName;
         if (oai_settings.bind_preset_to_connection) {
             $('.model_custom_select').empty();
         }
@@ -6618,6 +6638,8 @@ async function updateClaudeOAuthStatus() {
 }
 
 let pendingChatProvider = null;
+let pendingChatPreset = null;
+let chatPresetRevision = 0;
 
 /** Reflect the active provider and the next action in the composer shortcut. */
 function updateChatProviderToggle() {
@@ -6629,9 +6651,11 @@ function updateChatProviderToggle() {
     if (pendingChatProvider) {
         const name = getChatProviderName(pendingChatProvider);
         label = t`${name} queued for the next response. Click to change or cancel.`;
+    } else if (pendingChatPreset) {
+        label = t`Preset ${pendingChatPreset} queued for the next response.`;
     }
     $('#chat_provider_toggle').attr({ title: label, 'aria-label': label, 'data-provider': isOpenAI ? 'openai' : 'claude' })
-        .toggleClass('provider-switch-pending', Boolean(pendingChatProvider));
+        .toggleClass('provider-switch-pending', Boolean(pendingChatProvider || pendingChatPreset));
 }
 
 function getChatProviderName(source) {
@@ -6639,6 +6663,8 @@ function getChatProviderName(source) {
 }
 
 function queueChatProvider(source) {
+    ++chatPresetRevision;
+    pendingChatPreset = null;
     pendingChatProvider = main_api === 'openai' && source === oai_settings.chat_completion_source ? null : source;
     // Keep the dropdown and all global settings on the in-flight provider.
     $('#chat_completion_source').val(oai_settings.chat_completion_source);
@@ -6647,9 +6673,33 @@ function queueChatProvider(source) {
     else toastr.info(t`Provider switch cancelled.`);
 }
 
+/** Keep presets from changing the in-flight parser, model or message identity. */
+function queueChatPreset(name) {
+    ++chatPresetRevision;
+    pendingChatProvider = null;
+    pendingChatPreset = name === oai_settings.preset_settings_openai ? null : name;
+    $('#settings_preset_openai').val(openai_setting_names[oai_settings.preset_settings_openai]);
+    updateChatProviderToggle();
+    if (pendingChatPreset) toastr.info(t`Preset ${name} will be used for the next response.`);
+    else toastr.info(t`Preset switch cancelled.`);
+}
+
 /** Apply only after response parsing, saving and any nested tool calls have settled. */
-export function applyPendingChatProvider() {
-    if (!pendingChatProvider || isGenerationInProgress()) return;
+export async function applyPendingChatProvider() {
+    if (isGenerationInProgress()) return;
+    if (pendingChatPreset) {
+        const name = pendingChatPreset;
+        pendingChatPreset = null;
+        updateChatProviderToggle();
+        if (openai_setting_names[name] === undefined) {
+            toastr.warning(t`Queued preset no longer exists: ${name}`);
+            return;
+        }
+        $('#settings_preset_openai').val(openai_setting_names[name]);
+        await onSettingsPresetChange();
+        return;
+    }
+    if (!pendingChatProvider) return;
     const target = pendingChatProvider;
     pendingChatProvider = null;
     if (main_api !== 'openai') $('#main_api').val('openai').trigger('change');
@@ -6658,7 +6708,9 @@ export function applyPendingChatProvider() {
 
 /** Use the dropdown handlers so settings, connection and feature updates stay identical. */
 function toggleChatProvider() {
-    const source = pendingChatProvider ?? (main_api === 'openai' ? oai_settings.chat_completion_source : null);
+    const presetSource = pendingChatPreset && oai_settings.bind_preset_to_connection
+        ? openai_settings[openai_setting_names[pendingChatPreset]]?.chat_completion_source : null;
+    const source = pendingChatProvider ?? presetSource ?? (main_api === 'openai' ? oai_settings.chat_completion_source : null);
     const target = source === chat_completion_sources.CLAUDE ? chat_completion_sources.OPENAI : chat_completion_sources.CLAUDE;
     if (isGenerationInProgress()) {
         queueChatProvider(target);
@@ -6906,11 +6958,13 @@ export function initOpenAI() {
 
     $('#chat_completion_source').on('change', function () {
         const target = String($(this).val());
-        if (isGenerationInProgress() && (target !== oai_settings.chat_completion_source || pendingChatProvider)) {
+        if (isGenerationInProgress() && (target !== oai_settings.chat_completion_source || pendingChatProvider || pendingChatPreset)) {
             queueChatProvider(target);
             return;
         }
         if (isGenerationInProgress()) return;
+        ++chatPresetRevision;
+        pendingChatPreset = null;
         pendingChatProvider = null;
         cancelStatusCheck('Chat Completion source changed');
         model_list = [];
@@ -7005,6 +7059,15 @@ export function initOpenAI() {
     $('#claude_image_generation').on('input', function () {
         oai_settings.claude_image_generation = Boolean($(this).prop('checked'));
         saveSettingsDebounced();
+    });
+
+    $('#claude_image_tool_description').on('input', function () {
+        oai_settings.claude_image_tool_description = String($(this).val());
+        saveSettingsDebounced();
+    });
+
+    $('#claude_image_tool_description_reset').on('click', function () {
+        $('#claude_image_tool_description').val(DEFAULT_IMAGE_TOOL_DESCRIPTION).trigger('input');
     });
 
     $('#openai_media_inlining').on('input', function () {

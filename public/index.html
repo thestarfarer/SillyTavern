@@ -2057,13 +2057,25 @@
                                             Lets the model generate pictures in its replies using GPT Image 2. Uses your Codex subscription when signed in, otherwise your OpenAI API connection.
                                         </div>
                                     </div>
-                                    <div class="range-block" data-source="claude">
-                                        <label for="claude_image_generation" class="checkbox_label widthFreeExpand">
-                                            <input id="claude_image_generation" type="checkbox" />
-                                            <span data-i18n="Generate images with ChatGPT">Generate images with ChatGPT</span>
-                                        </label>
-                                        <div class="flexBasis100p toggle-description justifyLeft" data-i18n="claude_image_generation_hint">
-                                            Lets Claude create pictures in its replies using GPT Image 2. Sign in to ChatGPT / Codex under the OpenAI provider first. Image prompts are sent to OpenAI and use your subscription's image allowance.
+                                    <div class="inline-drawer wide100p marginBot10" data-source="claude">
+                                        <div class="inline-drawer-toggle inline-drawer-header">
+                                            <b data-i18n="Image generation">Image generation</b>
+                                            <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
+                                        </div>
+                                        <div class="inline-drawer-content">
+                                            <label for="claude_image_generation" class="checkbox_label widthFreeExpand">
+                                                <input id="claude_image_generation" type="checkbox" />
+                                                <span data-i18n="Generate images with ChatGPT">Generate images with ChatGPT</span>
+                                            </label>
+                                            <div class="toggle-description justifyLeft marginBot10" data-i18n="claude_image_generation_hint">
+                                                Lets Claude create pictures in its replies using GPT Image 2. Sign in to ChatGPT / Codex under the OpenAI provider first. Image prompts are sent to OpenAI and use your subscription's image allowance.
+                                            </div>
+                                            <label for="claude_image_tool_description" data-i18n="Image tool description">Image tool description</label>
+                                            <textarea id="claude_image_tool_description" class="text_pole wide100p" rows="6" maxlength="8000"></textarea>
+                                            <div class="toggle-description justifyLeft" data-i18n="claude_image_tool_description_hint">
+                                                Instructions Claude receives about when and how to use the image tool. Leave empty to use the default description.
+                                            </div>
+                                            <button id="claude_image_tool_description_reset" type="button" class="menu_button" data-i18n="Restore default">Restore default</button>
                                         </div>
                                     </div>
                                     <div id="request_images_block" class="range-block" data-source="makersuite,vertexai">

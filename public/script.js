@@ -4131,7 +4131,7 @@ export async function Generate(type, options = {}, dryRun = false) {
         return await generateInternal(type, options, dryRun);
     } finally {
         activeGenerationCalls--;
-        applyPendingChatProvider();
+        await applyPendingChatProvider();
     }
 }
 
