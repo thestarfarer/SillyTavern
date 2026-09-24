@@ -70,6 +70,7 @@ import { getVertexAIAuth, getProjectIdFromServiceAccount } from '../google.js';
 
 const API_OPENAI = 'https://api.openai.com/v1';
 const API_CLAUDE = 'https://api.anthropic.com/v1';
+const CLAUDE_CODE_VERSION = '2.1.281';
 const API_MISTRAL = 'https://api.mistral.ai/v1';
 const API_COHERE_V1 = 'https://api.cohere.ai/v1';
 const API_COHERE_V2 = 'https://api.cohere.ai/v2';
@@ -211,7 +212,7 @@ function setJsonObjectFormat(bodyParams, messages, jsonSchema) {
  */
 function computeBillingHeader(messages) {
     const salt = '59cf53e54c78';
-    const version = '2.1.206';
+    const version = CLAUDE_CODE_VERSION;
     let text = '';
     for (const msg of messages) {
         if (msg.role === 'user') {
@@ -475,7 +476,7 @@ async function sendClaudeRequest(request, response) {
             ...additionalHeaders,
         };
         if (useOAuth) {
-            fetchHeaders['User-Agent'] = 'claude-cli/2.1.206 (external, cli)';
+            fetchHeaders['User-Agent'] = `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`;
             fetchHeaders['x-app'] = 'cli';
             fetchHeaders['X-Claude-Code-Session-Id'] = oauthManager.getSessionId();
             // Accept + SDK telemetry headers, matching the official client on
