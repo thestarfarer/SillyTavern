@@ -6042,6 +6042,7 @@ export function isImageInliningSupported() {
         'claude-3',
         'claude-opus-4',
         'claude-opus-5',
+        'claude-opus-5-5',
         'claude-sonnet-4',
         'claude-sonnet-5',
         'claude-haiku-4',
