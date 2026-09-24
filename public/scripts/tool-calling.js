@@ -861,8 +861,9 @@ export class ToolManager {
     /**
      * Saves function tool invocations to the last user chat message extra metadata.
      * @param {ToolInvocation[]} invocations Successful tool invocations
+     * @param {string|null} [reasoningSignature] Signed Claude content for the tool continuation
      */
-    static async saveFunctionToolInvocations(invocations) {
+    static async saveFunctionToolInvocations(invocations, reasoningSignature = null) {
         if (!Array.isArray(invocations) || invocations.length === 0) {
             return;
         }
@@ -875,6 +876,7 @@ export class ToolManager {
             extra: {
                 isSmallSys: true,
                 tool_invocations: invocations,
+                ...(reasoningSignature && { reasoning_signature: reasoningSignature }),
                 api: getGeneratingApi(),
                 model: getGeneratingModel(),
             },

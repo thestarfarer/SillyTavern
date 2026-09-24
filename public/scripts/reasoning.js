@@ -1,3 +1,4 @@
+import { serializeClaudeContent } from './claude-thinking.js';
 import {
     moment,
 } from '../lib.js';
@@ -158,12 +159,15 @@ export function extractReasoningSignatureFromData(data, {
     mainApi = null,
     chatCompletionSource = null,
 } = {}) {
-    // Only Gemini models use thought signatures (via MakerSuite/VertexAI or OpenRouter)
+    // Claude preserves signed content blocks; Gemini preserves opaque thought signatures.
     if ((mainApi ?? main_api) !== 'openai') {
         return null;
     }
 
     const source = chatCompletionSource ?? oai_settings.chat_completion_source;
+    if (source === chat_completion_sources.CLAUDE) {
+        return data?.choices?.[0]?.message?.images?.length ? null : serializeClaudeContent(data?.content);
+    }
     const isGemini = source === chat_completion_sources.MAKERSUITE || source === chat_completion_sources.VERTEXAI;
     const isOpenRouter = source === chat_completion_sources.OPENROUTER;
 

@@ -5274,9 +5274,10 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
                         return;
                     }
 
+                    const toolReasoningSignature = oai_settings.chat_completion_source === chat_completion_sources.CLAUDE ? streamingProcessor.reasoningSignature : null;
                     streamingProcessor = null;
                     depth = depth + 1;
-                    await ToolManager.saveFunctionToolInvocations(invocationResult.invocations);
+                    await ToolManager.saveFunctionToolInvocations(invocationResult.invocations, toolReasoningSignature);
                     return Generate('normal', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth }, dryRun);
                 }
             }
@@ -5402,7 +5403,7 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
                 }
 
                 depth = depth + 1;
-                await ToolManager.saveFunctionToolInvocations(invocationResult.invocations);
+                await ToolManager.saveFunctionToolInvocations(invocationResult.invocations, oai_settings.chat_completion_source === chat_completion_sources.CLAUDE ? reasoningSignature : null);
                 return Generate('normal', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth }, dryRun);
             }
         }
@@ -6130,7 +6131,7 @@ export function extractJsonFromData(data, { mainApi = null, chatCompletionSource
             const text = extractMessageFromData(data, mainApi);
             switch (chatCompletionSource) {
                 case chat_completion_sources.CLAUDE:
-                    result = data?.content?.find(x => x.type === 'tool_use')?.input;
+                    result = (text ? tryParse(text) : undefined) ?? data?.content?.find(x => x.type === 'tool_use')?.input;
                     break;
                 case chat_completion_sources.PERPLEXITY:
                     result = tryParse(removeReasoningFromString(text));
