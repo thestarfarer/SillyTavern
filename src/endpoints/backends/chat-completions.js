@@ -299,6 +299,7 @@ async function sendClaudeRequest(request, response) {
         // Thinking + web search: every current model except the legacy claude-3.x
         // basics. `opus-4`/`sonnet-4` prefixes already cover 4-x variants.
         const useThinking = /^claude-(3-7|opus-4|opus-5|sonnet-4|sonnet-5|haiku-4-5|fable-5|mythos-5)/.test(request.body.model);
+        const adaptiveThinkingOnly = /^claude-opus-5-5(?:$|-)/.test(request.body.model);
         const useWebSearch = /^claude-(3-5|3-7|opus-4|opus-5|sonnet-4|sonnet-5|haiku-4-5|fable-5|mythos-5)/.test(request.body.model) && Boolean(request.body.enable_web_search);
         // temp/top_p mutual-exclusivity models (send one or the other).
         const isLimitedSampling = /^claude-(opus-4-1|sonnet-4-5|haiku-4-5|opus-4-5|opus-4-6)/.test(request.body.model);
@@ -411,7 +412,10 @@ async function sendClaudeRequest(request, response) {
         const reasoningEffort = request.body.reasoning_effort;
         const budgetTokens = calculateClaudeBudgetTokens(requestBody.max_tokens, reasoningEffort, requestBody.stream);
 
-        if (useThinking && Number.isInteger(budgetTokens)) {
+        if (adaptiveThinkingOnly) {
+            requestBody.thinking = { type: 'adaptive' };
+            fixThinkingPrefill = true;
+        } else if (useThinking && Number.isInteger(budgetTokens)) {
             // No prefill when thinking
             fixThinkingPrefill = true;
             const minThinkTokens = 1024;
@@ -513,7 +517,10 @@ async function sendClaudeRequest(request, response) {
 
             /** @type {any} */
             const generateResponseJson = await generateResponse.json();
-            const responseText = generateResponseJson?.content?.[0]?.text || '';
+            const responseText = (generateResponseJson?.content || [])
+                .filter(block => block.type === 'text')
+                .map(block => block.text)
+                .join('');
             console.debug('Claude response:', generateResponseJson);
 
             // Wrap it back to OAI format + save the original content. Forward usage
