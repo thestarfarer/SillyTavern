@@ -1,3 +1,4 @@
+import { restoreClaudeContent } from '../public/scripts/claude-thinking.js';
 import crypto from 'node:crypto';
 import { getConfigValue, tryParse } from './util.js';
 
@@ -232,7 +233,17 @@ export function convertClaudeMessages(messages, prefillString, useSysPrompt, use
 
     // Now replace all further messages that have the role 'system' with the role 'user'. (or all if we're not using one)
     const parse = (str) => typeof str === 'string' ? JSON.parse(str) : str;
-    messages.forEach((message) => {
+    messages.forEach((message, index) => {
+        const restored = !useTools && message.tool_calls?.length ? null : restoreClaudeContent(message, messages[index - 1]);
+        delete message.signature;
+        if (restored) {
+            if (restored.replacePrevious) messages[index - 1].content = [];
+            message.content = restored.content;
+            delete message.name;
+            delete message.tool_calls;
+            delete message.tool_call_id;
+            return;
+        }
         if (message.role === 'assistant' && message.tool_calls) {
             message.content = message.tool_calls.map((tc) => ({
                 type: 'tool_use',
@@ -997,7 +1008,8 @@ export function cachingAtDepthForClaude(messages, cachingAtDepth, ttl) {
         if (messages[i].role !== previousRoleName) {
             if (depth === cachingAtDepth || depth === cachingAtDepth + 2) {
                 const content = messages[i].content;
-                content[content.length - 1].cache_control = { type: 'ephemeral', ttl: ttl };
+                const block = content.findLast(block => !['thinking', 'redacted_thinking'].includes(block.type));
+                if (block) block.cache_control = { type: 'ephemeral', ttl: ttl };
             }
 
             if (depth === cachingAtDepth + 2) {

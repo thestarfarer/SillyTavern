@@ -4,6 +4,7 @@
 * https://github.com/CncAnon1/TavernAITurbo
 */
 import { Fuse, DOMPurify } from '../lib.js';
+import { captureClaudeContent } from './claude-thinking.js';
 import { DEFAULT_IMAGE_TOOL_DESCRIPTION } from './image-tool.js';
 import { hasCodexOAuth, initCodexOAuth, updateCodexOAuthStatus, updateCodexCacheReadout } from './codex-oauth.js';
 
@@ -241,6 +242,7 @@ export const reasoning_effort_types = {
     low: 'low',
     medium: 'medium',
     high: 'high',
+    xhigh: 'xhigh',
     min: 'min',
     max: 'max',
 };
@@ -964,6 +966,7 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
             const invocations = chatPrompt.invocations;
             const toolCallMessage = await Message.createAsync(chatMessage.role, undefined, 'toolCall-' + chatMessage.identifier);
             const toolResultMessages = await Promise.all(invocations.slice().reverse().map((invocation) => Message.createAsync('tool', invocation.result || '[No content]', invocation.id)));
+            if (includeSignature && chatPrompt.signature) toolCallMessage.signature = chatPrompt.signature;
             await toolCallMessage.setToolCalls(invocations, includeSignature);
             if (chatCompletion.canAffordAll([toolCallMessage, ...toolResultMessages])) {
                 for (const resultMessage of toolResultMessages) {
@@ -3045,6 +3048,7 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, ov
     const show_thoughts = overrideShowThoughts ?? oai_settings.show_thoughts;
 
     if (chat_completion_source === chat_completion_sources.CLAUDE) {
+        captureClaudeContent(data, state);
         if (data.type === 'sillytavern_images') {
             state.images ??= [];
             state.images.push(...(data.delta?.images || []).map(image => image.image_url?.url).filter(isDataURL));
@@ -6228,7 +6232,7 @@ export function isReasoningSignatureSupported(settings = oai_settings) {
     const isGoogle = [chat_completion_sources.VERTEXAI, chat_completion_sources.MAKERSUITE].includes(settings.chat_completion_source);
     // Need a more crunchy check for OpenRouter: look for Gemini models
     const isOpenRouterGemini = settings.chat_completion_source === chat_completion_sources.OPENROUTER && /google\/gemini/i.test(settings.openrouter_model);
-    return isGoogle || isOpenRouterGemini;
+    return settings.chat_completion_source === chat_completion_sources.CLAUDE || isGoogle || isOpenRouterGemini;
 }
 
 /**

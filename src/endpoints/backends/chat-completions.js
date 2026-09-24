@@ -71,6 +71,7 @@ import { getVertexAIAuth, getProjectIdFromServiceAccount } from '../google.js';
 const API_OPENAI = 'https://api.openai.com/v1';
 const API_CLAUDE = 'https://api.anthropic.com/v1';
 const CLAUDE_CODE_VERSION = '2.1.281';
+const CLAUDE_CODE_SDK_VERSION = '0.112.1';
 const API_MISTRAL = 'https://api.mistral.ai/v1';
 const API_COHERE_V1 = 'https://api.cohere.ai/v1';
 const API_COHERE_V2 = 'https://api.cohere.ai/v2';
@@ -259,7 +260,11 @@ async function sendClaudeRequest(request, response) {
     if (!request.body.reverse_proxy) {
         // Try OAuth first
         oauthManager = getOAuthManager(request.user.directories);
+        const hasOAuth = oauthManager.getState().hasTokens;
         authToken = await oauthManager.getValidAccessToken();
+        if (hasOAuth && !authToken) {
+            return response.status(401).json({ error: { message: 'Claude subscription authentication failed. Refresh or re-import your Claude credentials.' } });
+        }
         if (authToken) {
             useOAuth = true;
             // Ensure profile is fetched (accountUuid + userId cached for metadata)
@@ -280,13 +285,11 @@ async function sendClaudeRequest(request, response) {
 
     try {
         const controller = new AbortController();
-        request.socket.removeAllListeners('close');
-        request.socket.on('close', function () {
-            controller.abort();
-        });
+        response.once('close', () => controller.abort());
+        if (response.destroyed) controller.abort();
         const additionalHeaders = {};
         const betaHeaders = useOAuth
-            ? ['output-128k-2025-02-19']
+            ? []
             : ['output-128k-2025-02-19', 'context-1m-2025-08-07'];
         const imageGeneration = request.body.claude_image_generation === true
             && !['quiet', 'impersonate'].includes(request.body.type) && !request.body.json_schema;
@@ -300,7 +303,10 @@ async function sendClaudeRequest(request, response) {
         // Thinking + web search: every current model except the legacy claude-3.x
         // basics. `opus-4`/`sonnet-4` prefixes already cover 4-x variants.
         const useThinking = /^claude-(3-7|opus-4|opus-5|sonnet-4|sonnet-5|haiku-4-5|fable-5|mythos-5)/.test(request.body.model);
-        const adaptiveThinkingOnly = /^claude-opus-5-5(?:$|-)/.test(request.body.model);
+        // Capabilities from Claude Code 2.1.281's compiled model registry.
+        const useAdaptiveThinking = /^claude-(opus-(4-[678]|5)|sonnet-(4-6|5)|fable-5|mythos-5)(?:$|-)/.test(request.body.model);
+        const supportsExtraHighEffort = /^claude-(opus-(4-[78]|5)|sonnet-5|fable-5|mythos-5-1)(?:$|-)/.test(request.body.model);
+        const adaptiveThinkingOnly = /^claude-(opus-5-5|fable-5|mythos-5-1)(?:$|-)/.test(request.body.model);
         const useWebSearch = /^claude-(3-5|3-7|opus-4|opus-5|sonnet-4|sonnet-5|haiku-4-5|fable-5|mythos-5)/.test(request.body.model) && Boolean(request.body.enable_web_search);
         // temp/top_p mutual-exclusivity models (send one or the other).
         const isLimitedSampling = /^claude-(opus-4-1|sonnet-4-5|haiku-4-5|opus-4-5|opus-4-6)/.test(request.body.model);
@@ -354,22 +360,22 @@ async function sendClaudeRequest(request, response) {
         }
 
         if (useTools) {
-            betaHeaders.push('tools-2024-05-16');
-            requestBody.tool_choice = { type: request.body.tool_choice || 'auto' };
+            if (!useOAuth) betaHeaders.push('tools-2024-05-16');
+            requestBody.tool_choice = { type: request.body.tool_choice === 'required' ? 'any' : request.body.tool_choice || 'auto' };
             requestBody.tools = (request.body.tools || [])
                 .filter(tool => tool.type === 'function')
                 .map(tool => tool.function)
                 .map(fn => ({ name: fn.name, description: fn.description, input_schema: flattenSchema(fn.parameters, request.body.chat_completion_source) }));
 
             if (imageGeneration) addClaudeImageTool(requestBody.tools, request.body.claude_image_tool_description);
-
-            if (enableSystemPromptCache && requestBody.tools.length) {
-                requestBody.tools[requestBody.tools.length - 1].cache_control = { type: 'ephemeral', ttl: cacheTTL };
-            }
         }
 
-        // Structured output is a forced tool
-        if (request.body.json_schema) {
+        // Native JSON output coexists with adaptive thinking. The legacy forced-tool
+        // workaround is rejected by models with always-on thinking (including Opus 5.5).
+        if (request.body.json_schema && useAdaptiveThinking) {
+            requestBody.output_config = { format: { type: 'json_schema', schema: request.body.json_schema.value } };
+            betaHeaders.push('structured-outputs-2025-12-15');
+        } else if (request.body.json_schema) {
             const jsonTool = {
                 name: request.body.json_schema.name,
                 description: request.body.json_schema.description || 'Well-formed JSON object',
@@ -387,13 +393,17 @@ async function sendClaudeRequest(request, response) {
             requestBody.tools = [...webSearchTool, ...(requestBody.tools || [])];
         }
 
+        if (enableSystemPromptCache && requestBody.tools?.length) {
+            requestBody.tools[requestBody.tools.length - 1].cache_control = { type: 'ephemeral', ttl: cacheTTL };
+        }
+
         if (cachingAtDepth !== -1) {
             cachingAtDepthForClaude(convertedPrompt.messages, cachingAtDepth, cacheTTL);
         }
 
         if (enableSystemPromptCache || cachingAtDepth !== -1) {
-            betaHeaders.push('prompt-caching-2024-07-31');
-            betaHeaders.push('extended-cache-ttl-2025-04-11');
+            if (!useOAuth) betaHeaders.push('prompt-caching-2024-07-31');
+            if (cacheTTL === '1h') betaHeaders.push('extended-cache-ttl-2025-04-11');
         }
 
         if (isLimitedSampling) {
@@ -410,13 +420,14 @@ async function sendClaudeRequest(request, response) {
             delete requestBody.top_k;
         }
 
-        const reasoningEffort = request.body.reasoning_effort;
+        const reasoningEffort = request.body.reasoning_effort === 'xhigh' && !supportsExtraHighEffort
+            ? 'high' : request.body.reasoning_effort;
         const budgetTokens = calculateClaudeBudgetTokens(requestBody.max_tokens, reasoningEffort, requestBody.stream);
 
-        if (adaptiveThinkingOnly) {
-            requestBody.thinking = { type: 'adaptive' };
+        if (useAdaptiveThinking) {
+            requestBody.thinking = { type: 'adaptive', display: request.body.include_reasoning ? 'summarized' : 'omitted' };
             fixThinkingPrefill = true;
-        } else if (useThinking && Number.isInteger(budgetTokens)) {
+        } else if (useThinking && !request.body.json_schema && Number.isInteger(budgetTokens)) {
             // No prefill when thinking
             fixThinkingPrefill = true;
             const minThinkTokens = 1024;
@@ -437,15 +448,31 @@ async function sendClaudeRequest(request, response) {
             delete requestBody.top_k;
         }
 
-        if ((fixThinkingPrefill || noPrefillModel) && convertedPrompt.messages.length && convertedPrompt.messages[convertedPrompt.messages.length - 1].role === 'assistant') {
+        if (requestBody.thinking) {
+            delete requestBody.temperature;
+            delete requestBody.top_p;
+            delete requestBody.top_k;
+            if (/^claude-(opus|sonnet|fable|mythos)-/.test(request.body.model)) {
+                betaHeaders.push('interleaved-thinking-2025-05-14');
+            }
+            if (['any', 'tool'].includes(requestBody.tool_choice?.type)) {
+                console.info('Claude: using automatic tool choice because thinking is enabled.');
+                requestBody.tool_choice = { type: 'auto' };
+            }
+        }
+
+        if ((fixThinkingPrefill || noPrefillModel || adaptiveThinkingOnly) && convertedPrompt.messages.length && convertedPrompt.messages[convertedPrompt.messages.length - 1].role === 'assistant') {
             convertedPrompt.messages[convertedPrompt.messages.length - 1].role = 'user';
         }
 
         // Verbosity = 'effort' (same values as OpenAI)
-        if (useVerbosity && request.body.verbosity) {
+        const effort = ['low', 'medium', 'high', 'xhigh', 'max'].includes(request.body.verbosity)
+            ? request.body.verbosity
+            : useAdaptiveThinking ? ({ min: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' })[reasoningEffort] : undefined;
+        if (useVerbosity && effort) {
             betaHeaders.push('effort-2025-11-24');
             requestBody.output_config ??= {};
-            requestBody.output_config.effort = request.body.verbosity;
+            requestBody.output_config.effort = effort === 'xhigh' && !supportsExtraHighEffort ? 'high' : effort;
         }
 
         // Add OAuth beta headers if using OAuth. The official client sends
@@ -459,7 +486,7 @@ async function sendClaudeRequest(request, response) {
         }
 
         if (betaHeaders.length) {
-            additionalHeaders['anthropic-beta'] = betaHeaders.join(',');
+            additionalHeaders['anthropic-beta'] = [...new Set(betaHeaders)].join(',');
         }
 
         // Build auth headers based on auth method
@@ -484,9 +511,13 @@ async function sendClaudeRequest(request, response) {
             // "node" even under Bun, since Bun isn't detected upstream).
             const stainlessOS = { linux: 'Linux', darwin: 'MacOS', win32: 'Windows', freebsd: 'FreeBSD', openbsd: 'OpenBSD' }[process.platform] || 'Unknown';
             const stainlessArch = { x64: 'x64', arm64: 'arm64', ia32: 'x32' }[process.arch] || process.arch;
-            fetchHeaders['Accept'] = request.body.stream ? 'text/event-stream' : 'application/json';
+            fetchHeaders['Accept'] = 'application/json';
+            // Claude Code enables dangerouslyAllowBrowser on its SDK client, which
+            // emits this header even in Node/Bun. This request stays server-side.
+            fetchHeaders['anthropic-dangerous-direct-browser-access'] = 'true';
+            fetchHeaders['x-client-request-id'] = uuidv4();
             fetchHeaders['X-Stainless-Lang'] = 'js';
-            fetchHeaders['X-Stainless-Package-Version'] = '0.94.0';
+            fetchHeaders['X-Stainless-Package-Version'] = CLAUDE_CODE_SDK_VERSION;
             fetchHeaders['X-Stainless-Runtime'] = 'node';
             fetchHeaders['X-Stainless-Runtime-Version'] = process.version;
             fetchHeaders['X-Stainless-OS'] = stainlessOS;
@@ -495,12 +526,29 @@ async function sendClaudeRequest(request, response) {
             fetchHeaders['X-Stainless-Timeout'] = '600';
         }
 
-        const generateResponse = await fetch(apiUrl + '/messages', {
+        const messagesUrl = new URL(apiUrl.replace(/\/$/, '') + '/messages');
+        if (useOAuth) messagesUrl.searchParams.set('beta', 'true');
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(600000)]);
+        const send = () => fetch(messagesUrl, {
             method: 'POST',
-            signal: controller.signal,
+            signal,
+            redirect: 'error',
             body: JSON.stringify(requestBody),
             headers: fetchHeaders,
         });
+        let generateResponse = await send();
+        // Retry only a rejected OAuth credential, before any response is forwarded.
+        // Do not replay a partially streamed generation or switch to a billed API key.
+        if (useOAuth && generateResponse.status === 401) {
+            const replacement = await oauthManager.recoverUnauthorized(authToken);
+            signal.throwIfAborted();
+            if (replacement) {
+                generateResponse.body?.destroy();
+                fetchHeaders.Authorization = `Bearer ${replacement}`;
+                fetchHeaders['X-Stainless-Retry-Count'] = '1';
+                generateResponse = await send();
+            }
+        }
 
         if (imageGeneration) {
             return await sendClaudeImageResponse(generateResponse, response, imageManager, controller, Boolean(request.body.stream));
