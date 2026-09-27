@@ -6360,3 +6360,48 @@ body:not(.movingUI) .drawer-content.maximized {
     outline: 1px dashed currentColor;
     outline-offset: -3px;
 }
+
+#chat_provider_toggle {
+    -webkit-touch-callout: none;
+    user-select: none;
+    touch-action: manipulation;
+}
+
+#chat_model_picker {
+    position: fixed;
+    z-index: 10000;
+    width: 340px;
+    box-sizing: border-box;
+    overflow: auto;
+    padding: 6px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 10px;
+    background: var(--SmartThemeBlurTintColor);
+    backdrop-filter: blur(20px);
+    color: var(--SmartThemeBodyColor);
+    box-shadow: 0 4px 20px #0008;
+}
+
+#chat_model_picker .chat_model_picker_heading {
+    padding: 6px 10px;
+    font-weight: bold;
+}
+
+#chat_model_picker button {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px;
+    border: 0;
+    border-radius: 6px;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    text-align: start;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+}
+
+#chat_model_picker button:is(:hover, :focus-visible, [aria-checked="true"]) {
+    background: var(--SmartThemeQuoteColor);
+}

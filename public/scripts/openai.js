@@ -5,6 +5,7 @@
 */
 import { Fuse, DOMPurify } from '../lib.js';
 import { captureClaudeContent } from './claude-thinking.js';
+import { closeChatModelPicker, initChatModelPicker } from './chat-model-picker.js';
 import { DEFAULT_IMAGE_TOOL_DESCRIPTION } from './image-tool.js';
 import { hasCodexOAuth, initCodexOAuth, updateCodexOAuthStatus, updateCodexCacheReadout } from './codex-oauth.js';
 
@@ -412,6 +413,7 @@ const default_settings = {
     personality_format: default_personality_format,
     openai_model: 'gpt-4-turbo',
     claude_model: 'claude-sonnet-4-5',
+    quick_model_history: { claude: [], openai: [] },
     claude_model_carousel: [],
     claude_model_carousel_enabled: false,
     codex_cache_enabled: true,
@@ -4807,6 +4809,7 @@ function onSettingsPresetChange() {
     }
     pendingChatPreset = null;
     pendingChatProvider = null;
+    pendingChatModel = null;
     const revision = ++chatPresetRevision;
     updateChatProviderToggle();
 
@@ -4868,6 +4871,9 @@ function onSettingsPresetChange() {
 
         $('#openai_logit_bias_preset').trigger('change');
 
+        if (oai_settings.bind_preset_to_connection) {
+            rememberChatModel(oai_settings.chat_completion_source, getQuickChatSelectedModel(oai_settings.chat_completion_source));
+        }
         saveSettingsDebounced();
         await eventSource.emit(event_types.OAI_PRESET_CHANGED_AFTER);
         await eventSource.emit(event_types.PRESET_CHANGED, { apiId: 'openai', name: presetName });
@@ -5224,6 +5230,7 @@ async function onModelChange() {
             value = default_settings.claude_model;
         }
         console.log('Claude model changed to', value);
+        rememberChatModel(chat_completion_sources.CLAUDE, value);
         oai_settings.claude_model = value;
         $('#model_claude_select').val(oai_settings.claude_model);
 
@@ -5232,6 +5239,7 @@ async function onModelChange() {
     if ($(this).is('#model_openai_select')) {
         if (!value && hasCodexOAuth) return;
         console.log('OpenAI model changed to', value);
+        rememberChatModel(chat_completion_sources.OPENAI, value);
         oai_settings.openai_model = value;
     }
 
@@ -6648,23 +6656,28 @@ async function updateClaudeOAuthStatus() {
 
 let pendingChatProvider = null;
 let pendingChatPreset = null;
+let pendingChatModel = null;
 let chatPresetRevision = 0;
 
 /** Reflect the active provider and the next action in the composer shortcut. */
 function updateChatProviderToggle() {
+    closeChatModelPicker();
     const source = main_api === 'openai' ? oai_settings.chat_completion_source : null;
     const isClaude = source === chat_completion_sources.CLAUDE;
     const isOpenAI = source === chat_completion_sources.OPENAI;
     let label = isClaude ? t`Switch to OpenAI (current: Claude)`
         : isOpenAI ? t`Switch to Claude (current: OpenAI)` : t`Switch to Claude`;
-    if (pendingChatProvider) {
+    if (pendingChatModel) {
+        label = t`${getChatProviderName(pendingChatModel.source)}: ${pendingChatModel.model} queued for the next response.`;
+    } else if (pendingChatProvider) {
         const name = getChatProviderName(pendingChatProvider);
         label = t`${name} queued for the next response. Click to change or cancel.`;
     } else if (pendingChatPreset) {
         label = t`Preset ${pendingChatPreset} queued for the next response.`;
     }
+    label += ' ' + t`Hold to choose a model.`;
     $('#chat_provider_toggle').attr({ title: label, 'aria-label': label, 'data-provider': isOpenAI ? 'openai' : 'claude' })
-        .toggleClass('provider-switch-pending', Boolean(pendingChatProvider || pendingChatPreset));
+        .toggleClass('provider-switch-pending', Boolean(pendingChatProvider || pendingChatPreset || pendingChatModel));
 }
 
 function getChatProviderName(source) {
@@ -6674,6 +6687,7 @@ function getChatProviderName(source) {
 function queueChatProvider(source) {
     ++chatPresetRevision;
     pendingChatPreset = null;
+    pendingChatModel = null;
     pendingChatProvider = main_api === 'openai' && source === oai_settings.chat_completion_source ? null : source;
     // Keep the dropdown and all global settings on the in-flight provider.
     $('#chat_completion_source').val(oai_settings.chat_completion_source);
@@ -6686,6 +6700,7 @@ function queueChatProvider(source) {
 function queueChatPreset(name) {
     ++chatPresetRevision;
     pendingChatProvider = null;
+    pendingChatModel = null;
     pendingChatPreset = name === oai_settings.preset_settings_openai ? null : name;
     $('#settings_preset_openai').val(openai_setting_names[oai_settings.preset_settings_openai]);
     updateChatProviderToggle();
@@ -6696,6 +6711,14 @@ function queueChatPreset(name) {
 /** Apply only after response parsing, saving and any nested tool calls have settled. */
 export async function applyPendingChatProvider() {
     if (isGenerationInProgress()) return;
+    if (pendingChatModel) {
+        const { source, model } = pendingChatModel;
+        pendingChatModel = null;
+        pendingChatProvider = null;
+        updateChatProviderToggle();
+        selectQuickChatModel(source, model);
+        return;
+    }
     if (pendingChatPreset) {
         const name = pendingChatPreset;
         pendingChatPreset = null;
@@ -6729,8 +6752,84 @@ function toggleChatProvider() {
     $('#chat_completion_source').val(target).trigger('change');
 }
 
+function getQuickChatModelSelector(source) {
+    if (source === chat_completion_sources.CLAUDE) return '#model_claude_select';
+    if (source === chat_completion_sources.OPENAI) return '#model_openai_select';
+    return null;
+}
+
+function getQuickChatSelectedModel(source) {
+    if (source === chat_completion_sources.CLAUDE) return oai_settings.claude_model;
+    if (source === chat_completion_sources.OPENAI) return oai_settings.openai_model;
+    return null;
+}
+
+function getQuickChatModels(source) {
+    const selector = getQuickChatModelSelector(source);
+    if (!selector) return [];
+    return Array.from(document.querySelector(selector)?.options || [])
+        .filter(option => {
+            const group = option.closest('optgroup');
+            return option.value && !option.disabled && !option.hidden && getComputedStyle(option).display !== 'none'
+                && (!group || (!group.disabled && !group.hidden && getComputedStyle(group).display !== 'none'));
+        })
+        .map(option => ({ id: option.value, label: option.textContent.trim() || option.value }));
+}
+
+function getRecentChatModels(source) {
+    const recent = oai_settings.quick_model_history?.[source];
+    // Seed existing installations with their current selection; older selections
+    // cannot be reconstructed. Remaining slots come from the live model dropdown.
+    return Array.isArray(recent) && recent.length ? recent : [getQuickChatSelectedModel(source)].filter(Boolean);
+}
+
+function rememberChatModel(source, model) {
+    if (!getQuickChatModelSelector(source) || !model) return;
+    oai_settings.quick_model_history = {
+        ...oai_settings.quick_model_history,
+        [source]: [...new Set([model, ...getRecentChatModels(source)])].slice(0, 5),
+    };
+}
+
+function selectQuickChatModel(source, model) {
+    if (!getQuickChatModels(source).some(item => item.id === model)) {
+        toastr.warning(t`The selected model is no longer available.`);
+        return;
+    }
+    ++chatPresetRevision;
+    pendingChatPreset = null;
+    pendingChatModel = null;
+    pendingChatProvider = null;
+    if (isGenerationInProgress()) {
+        pendingChatProvider = main_api === 'openai' && source === oai_settings.chat_completion_source ? null : source;
+        if (pendingChatProvider || model !== getQuickChatSelectedModel(source)) pendingChatModel = { source, model };
+        rememberChatModel(source, model);
+        saveSettingsDebounced();
+        updateChatProviderToggle();
+        if (pendingChatModel) toastr.info(t`${model} will be used for the next response.`);
+        else toastr.info(t`Model switch cancelled.`);
+        return;
+    }
+    if (main_api !== 'openai') $('#main_api').val('openai').trigger('change');
+    if (oai_settings.chat_completion_source !== source) $('#chat_completion_source').val(source).trigger('change');
+    $(getQuickChatModelSelector(source)).val(model).trigger('change');
+    updateChatProviderToggle();
+}
+
 export function initOpenAI() {
-    $('#chat_provider_toggle').on('click', toggleChatProvider);
+    initChatModelPicker({
+        button: document.getElementById('chat_provider_toggle'),
+        getProvider: () => {
+            const id = main_api === 'openai' && oai_settings.chat_completion_source === chat_completion_sources.OPENAI
+                ? chat_completion_sources.OPENAI : chat_completion_sources.CLAUDE;
+            return { id, name: getChatProviderName(id) };
+        },
+        getModels: getQuickChatModels,
+        getRecent: getRecentChatModels,
+        getSelected: source => pendingChatModel?.source === source ? pendingChatModel.model : getQuickChatSelectedModel(source),
+        onSelect: selectQuickChatModel,
+        onClick: toggleChatProvider,
+    });
     eventSource.on(event_types.CHATCOMPLETION_SOURCE_CHANGED, updateChatProviderToggle);
     eventSource.on(event_types.MAIN_API_CHANGED, updateChatProviderToggle);
     eventSource.on(event_types.GROUP_WRAPPER_FINISHED, applyPendingChatProvider);
@@ -6975,6 +7074,7 @@ export function initOpenAI() {
         ++chatPresetRevision;
         pendingChatPreset = null;
         pendingChatProvider = null;
+        pendingChatModel = null;
         cancelStatusCheck('Chat Completion source changed');
         model_list = [];
         oai_settings.chat_completion_source = String($(this).find(':selected').val());
