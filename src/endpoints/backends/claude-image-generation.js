@@ -2,6 +2,37 @@ import crypto from 'node:crypto';
 import { once } from 'node:events';
 import { parseCodexEvents } from './codex.js';
 import { IMAGE_TOOL, IMAGE_TOOL_NAME, buildImageGenerationRequest, generateInlineImage } from './inline-image-generation.js';
+import { captureClaudeContent } from '../../../public/scripts/claude-thinking.js';
+
+function combinedUsage(first = {}, second = {}) {
+    const usage = { ...first, ...second };
+    for (const key of Object.keys(usage)) {
+        if (typeof first[key] === 'number' && typeof second[key] === 'number') usage[key] = first[key] + second[key];
+    }
+    return usage;
+}
+
+/** Return actual image bytes in the tool result, independently of the inline-media setting. */
+async function imageToolResult(call, image) {
+    const [, mime, base64] = /^data:(image\/(?:png|jpeg|webp));base64,(.+)$/.exec(image.image_url.url) || [];
+    if (!base64) throw new Error('Generated image could not be returned to Claude.');
+    let source = { type: 'base64', media_type: mime, data: base64 };
+    // Keep the displayed original; reduce only oversized copies sent back to Claude.
+    if (Buffer.byteLength(base64, 'base64') > 4 * 1024 * 1024) {
+        const { Jimp, JimpMime } = await import('../../jimp.js');
+        const picture = await Jimp.read(Buffer.from(base64, 'base64'));
+        const scale = Math.min(1, 1568 / Math.max(picture.bitmap.width, picture.bitmap.height));
+        picture.resize({ w: Math.max(1, Math.round(picture.bitmap.width * scale)), h: Math.max(1, Math.round(picture.bitmap.height * scale)) });
+        source = { type: 'base64', media_type: 'image/jpeg', data: (await picture.getBuffer(JimpMime.jpeg, { quality: 85, jpegColorSpace: 'ycbcr' })).toString('base64') };
+    }
+    return {
+        type: 'tool_result', tool_use_id: call.id,
+        content: [
+            { type: 'image', source },
+            { type: 'text', text: 'The generated image is attached to your reply. Continue your response using this image and the conversation context, without repeating text you already wrote. Do not generate another image.' },
+        ],
+    };
+}
 
 /** Add the server-owned tool without changing the user's other tools. */
 export function addClaudeImageTool(tools, description = '') {
@@ -11,11 +42,12 @@ export function addClaudeImageTool(tools, description = '') {
 }
 
 /** Intercept only our image calls; preserve Claude's native text, thinking and extension tools. */
-export async function sendClaudeImageResponse(upstream, response, manager, controller, streaming) {
+export async function sendClaudeImageResponse(upstream, response, manager, controller, streaming, continueReply = null) {
     const requestId = crypto.randomUUID();
     const abort = () => controller.abort();
     response.on('close', abort);
     let heartbeat;
+    let continuation;
     const write = async event => {
         controller.signal.throwIfAborted();
         if (!response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)) {
@@ -39,6 +71,19 @@ export async function sendClaudeImageResponse(upstream, response, manager, contr
             await onImage(image);
         }
     };
+    const continueWithImages = async (message, images) => {
+        const calls = message.content.filter(block => block.type === 'tool_use');
+        if (calls.some(call => call.name !== IMAGE_TOOL_NAME)) throw new Error('Claude returned parallel tools despite single-tool mode. Retry image generation.');
+        const results = await Promise.all(calls.map((call, index) => imageToolResult(call, images[index])));
+        controller.signal.throwIfAborted();
+        console.info(`[Claude images ${requestId}] Returning ${images.length} generated image(s) to Claude for reply continuation`);
+        continuation = await continueReply(message, results);
+        if (!continuation.ok) {
+            const error = await continuation.json().catch(() => null);
+            throw new Error(`Claude image continuation failed (HTTP ${continuation.status}): ${error?.error?.message || 'No error details returned.'}`);
+        }
+        return continuation;
+    };
     try {
         if (response.destroyed) controller.abort();
         controller.signal.throwIfAborted();
@@ -51,15 +96,30 @@ export async function sendClaudeImageResponse(upstream, response, manager, contr
             if (message.error || !Array.isArray(message.content)) throw new Error('Claude returned an invalid response.');
             const calls = message.content.filter(block => block.type === 'tool_use' && block.name === IMAGE_TOOL_NAME);
             if (calls.length && message.stop_reason !== 'tool_use') throw new Error('Claude image tool call did not complete. Increase the response token limit and retry.');
+            if (continueReply && calls.length && message.content.some(block => block.type === 'tool_use' && block.name !== IMAGE_TOOL_NAME)) {
+                throw new Error('Claude returned parallel tools despite single-tool mode. Retry image generation.');
+            }
             const content = message.content.filter(block => !calls.includes(block));
             let text = content.filter(block => block.type === 'text').map(block => block.text).join('');
             const images = [];
             await generate(calls.map(call => JSON.stringify(call.input)), image => { images.push(image); });
+            let usage = message.usage;
+            if (continueReply && calls.length) {
+                const followup = await (await continueWithImages(message, images)).json();
+                if (followup.error || !Array.isArray(followup.content) || followup.content.some(block => block.type === 'tool_use')) {
+                    throw new Error('Claude returned an invalid image continuation.');
+                }
+                if (text && followup.content.some(block => block.type === 'text' && block.text)) content.push({ type: 'text', text: '\n\n' });
+                content.push(...followup.content);
+                text = content.filter(block => block.type === 'text').map(block => block.text).join('');
+                usage = combinedUsage(usage, followup.usage);
+                console.info(`[Claude images ${requestId}] Claude reply continuation completed`);
+            }
             if (images.length && !text) {
                 text = 'Generated image.';
                 content.push({ type: 'text', text });
             }
-            return response.json({ choices: [{ message: { content: text, images } }], content, usage: message.usage });
+            return response.json({ choices: [{ message: { content: text, images } }], content, usage });
         }
 
         response.setHeader('Content-Type', 'text/event-stream');
@@ -74,8 +134,14 @@ export async function sendClaudeImageResponse(upstream, response, manager, contr
         let hasText = false;
         let completed = false;
         let stopReason;
+        const original = {};
+        let usage = {};
         for await (const event of parseCodexEvents(upstream.body)) {
             if (event.type === 'error') throw new Error(event.error?.message || 'Claude stream failed.');
+            // Capture before hiding image calls or renumbering blocks. Signed thinking
+            // and tool arguments must be replayed in their original order, unmodified.
+            if (continueReply) captureClaudeContent(event, original);
+            usage = { ...usage, ...(event.message?.usage || event.usage) };
             if (event.type === 'content_block_start') {
                 const block = event.content_block;
                 if (block?.type === 'tool_use' && block.name === IMAGE_TOOL_NAME) {
@@ -117,11 +183,46 @@ export async function sendClaudeImageResponse(upstream, response, manager, contr
         if (calls.size && (stopReason !== 'tool_use' || [...calls.values()].some(call => !call.closed))) {
             throw new Error('Claude image tool call did not complete. Increase the response token limit and retry.');
         }
+        if (continueReply && calls.size && (externalTools || original.claudeContentInvalid)) {
+            throw new Error('Claude image request could not be safely continued. Retry image generation.');
+        }
+        const images = [];
         await generate([...calls.values()].map(call => call.arguments || JSON.stringify(call.input)), async image => {
-            await write({ type: 'sillytavern_images', delta: { images: [image], text: hasText ? '' : 'Generated image.' } });
-            hasText = true;
+            images.push(image);
+            await write({ type: 'sillytavern_images', delta: { images: [image], text: hasText || continueReply ? '' : 'Generated image.' } });
+            if (!continueReply) hasText = true;
         });
-        for (const event of finalEvents) await write(event);
+        if (continueReply && calls.size) {
+            const followup = await continueWithImages({ content: original.claudeContent.filter(Boolean) }, images);
+            let followupUsage = {};
+            let finished = false;
+            let needsSeparator = hasText;
+            const followupIndexes = new Map();
+            for await (const event of parseCodexEvents(followup.body)) {
+                if (event.type === 'error') throw new Error(event.error?.message || 'Claude image continuation failed.');
+                followupUsage = { ...followupUsage, ...(event.message?.usage || event.usage) };
+                if (event.type === 'message_start') continue;
+                if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+                    throw new Error('Claude requested a tool while finishing the image reply.');
+                }
+                if (event.type === 'content_block_start' && event.content_block?.type === 'text' && needsSeparator) {
+                    await write({ type: 'content_block_start', index: nextIndex, content_block: { type: 'text', text: '' } });
+                    await write({ type: 'content_block_delta', index: nextIndex, delta: { type: 'text_delta', text: '\n\n' } });
+                    await write({ type: 'content_block_stop', index: nextIndex });
+                    nextIndex++;
+                    needsSeparator = false;
+                }
+                if (event.type === 'content_block_start') followupIndexes.set(event.index, nextIndex++);
+                if (followupIndexes.has(event.index)) event.index = followupIndexes.get(event.index);
+                if (event.type === 'message_delta') event.usage = combinedUsage(usage, followupUsage);
+                await write(event);
+                if (event.type === 'message_stop') { finished = true; break; }
+            }
+            if (!finished) throw new Error('Claude image continuation ended before the response completed.');
+            console.info(`[Claude images ${requestId}] Claude reply continuation completed`);
+        } else {
+            for (const event of finalEvents) await write(event);
+        }
         response.end();
     } catch (error) {
         if (!controller.signal.aborted && !response.destroyed) {
@@ -138,5 +239,6 @@ export async function sendClaudeImageResponse(upstream, response, manager, contr
         clearInterval(heartbeat);
         response.removeListener('close', abort);
         upstream.body?.destroy();
+        continuation?.body?.destroy();
     }
 }

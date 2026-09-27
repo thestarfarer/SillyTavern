@@ -293,6 +293,7 @@ async function sendClaudeRequest(request, response) {
             : ['output-128k-2025-02-19', 'context-1m-2025-08-07'];
         const imageGeneration = request.body.claude_image_generation === true
             && !['quiet', 'impersonate'].includes(request.body.type) && !request.body.json_schema;
+        const continueAfterImage = imageGeneration && request.body.claude_image_continue === true;
         const imageManager = imageGeneration ? getCodexOAuthManager(request.user.directories) : null;
         if (imageManager && !imageManager.getState().hasTokens) {
             return response.status(400).json({ error: { message: 'Sign in to ChatGPT / Codex under the OpenAI provider to let Claude generate images.' } });
@@ -489,6 +490,12 @@ async function sendClaudeRequest(request, response) {
             additionalHeaders['anthropic-beta'] = [...new Set(betaHeaders)].join(',');
         }
 
+        // A server-owned image tool must complete before any client-owned tool.
+        // Prevent mixed tool batches when the server will continue the reply itself.
+        if (continueAfterImage && ['auto', 'any', 'tool'].includes(requestBody.tool_choice?.type)) {
+            requestBody.tool_choice.disable_parallel_tool_use = true;
+        }
+
         // Build auth headers based on auth method
         const authHeaders = useOAuth
             ? { 'Authorization': `Bearer ${authToken}` }
@@ -529,29 +536,41 @@ async function sendClaudeRequest(request, response) {
         const messagesUrl = new URL(apiUrl.replace(/\/$/, '') + '/messages');
         if (useOAuth) messagesUrl.searchParams.set('beta', 'true');
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(600000)]);
-        const send = () => fetch(messagesUrl, {
-            method: 'POST',
-            signal,
-            redirect: 'error',
-            body: JSON.stringify(requestBody),
-            headers: fetchHeaders,
-        });
-        let generateResponse = await send();
-        // Retry only a rejected OAuth credential, before any response is forwarded.
-        // Do not replay a partially streamed generation or switch to a billed API key.
-        if (useOAuth && generateResponse.status === 401) {
-            const replacement = await oauthManager.recoverUnauthorized(authToken);
-            signal.throwIfAborted();
-            if (replacement) {
-                generateResponse.body?.destroy();
-                fetchHeaders.Authorization = `Bearer ${replacement}`;
-                fetchHeaders['X-Stainless-Retry-Count'] = '1';
-                generateResponse = await send();
+        const send = async (body = requestBody) => {
+            const headers = { ...fetchHeaders };
+            if (useOAuth) {
+                headers['x-client-request-id'] = uuidv4();
+                headers['X-Stainless-Retry-Count'] = '0';
             }
-        }
+            const execute = () => fetch(messagesUrl, {
+                method: 'POST', signal, redirect: 'error',
+                body: JSON.stringify(body), headers,
+            });
+            let upstream = await execute();
+            // Retry only a rejected OAuth credential, before forwarding this request.
+            if (useOAuth && upstream.status === 401) {
+                const replacement = await oauthManager.recoverUnauthorized(headers.Authorization.slice('Bearer '.length));
+                signal.throwIfAborted();
+                if (replacement) {
+                    upstream.body?.destroy();
+                    headers.Authorization = fetchHeaders.Authorization = `Bearer ${replacement}`;
+                    headers['X-Stainless-Retry-Count'] = '1';
+                    upstream = await execute();
+                }
+            }
+            return upstream;
+        };
+        const generateResponse = await send();
 
         if (imageGeneration) {
-            return await sendClaudeImageResponse(generateResponse, response, imageManager, controller, Boolean(request.body.stream));
+            const continueReply = continueAfterImage ? (assistant, results) => send({
+                ...requestBody,
+                messages: [...requestBody.messages, { role: 'assistant', content: assistant.content }, { role: 'user', content: results }],
+                // Keep tool definitions stable for signed thinking and caching, but
+                // finish in text instead of starting another image or extension call.
+                tool_choice: { type: 'none' },
+            }) : null;
+            return await sendClaudeImageResponse(generateResponse, response, imageManager, controller, Boolean(request.body.stream), continueReply);
         }
 
         if (request.body.stream) {
