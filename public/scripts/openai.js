@@ -360,6 +360,7 @@ export const settingsToUpdate = {
     media_inlining: ['#openai_media_inlining', 'media_inlining', true, false],
     openai_image_generation: ['#openai_image_generation', 'openai_image_generation', true, false],
     claude_image_generation: ['#claude_image_generation', 'claude_image_generation', true, false],
+    claude_image_continue: ['#claude_image_continue', 'claude_image_continue', true, false],
     claude_image_tool_description: ['#claude_image_tool_description', 'claude_image_tool_description', false, false],
     inline_image_quality: ['#openai_inline_image_quality', 'inline_image_quality', false, false],
     continue_prefill: ['#continue_prefill', 'continue_prefill', true, false],
@@ -472,6 +473,7 @@ const default_settings = {
     media_inlining: true,
     openai_image_generation: false,
     claude_image_generation: false,
+    claude_image_continue: false,
     claude_image_tool_description: DEFAULT_IMAGE_TOOL_DESCRIPTION,
     inline_image_quality: 'auto',
     bypass_status_check: false,
@@ -2667,6 +2669,8 @@ export async function createGenerationParameters(settings, model, type, messages
             && Boolean(settings.claude_image_generation) && !['quiet', 'impersonate'].includes(type) && !jsonSchema,
         'claude_image_tool_description': settings.chat_completion_source === chat_completion_sources.CLAUDE && settings.claude_image_generation
             ? settings.claude_image_tool_description : undefined,
+        'claude_image_continue': settings.chat_completion_source === chat_completion_sources.CLAUDE
+            && Boolean(settings.claude_image_generation) && Boolean(settings.claude_image_continue),
         'request_image_resolution': String(settings.request_image_resolution),
         'request_image_aspect_ratio': String(settings.request_image_aspect_ratio),
         'custom_prompt_post_processing': settings.custom_prompt_post_processing,
@@ -7068,6 +7072,11 @@ export function initOpenAI() {
 
     $('#claude_image_tool_description').on('input', function () {
         oai_settings.claude_image_tool_description = String($(this).val());
+        saveSettingsDebounced();
+    });
+
+    $('#claude_image_continue').on('input', function () {
+        oai_settings.claude_image_continue = Boolean($(this).prop('checked'));
         saveSettingsDebounced();
     });
 
