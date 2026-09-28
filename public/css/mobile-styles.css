@@ -583,7 +583,7 @@
    the chat and keep the complete composer inside it, including browser panning. */
 @media screen and (max-width: 1000px) {
     html:fullscreen #sheld {
-        --fullscreen-chat-height: max(0px, calc(var(--fullscreen-viewport-height, 100dvh) - var(--topBarBlockSize) - 1px));
+        --fullscreen-chat-height: max(0px, calc(var(--fullscreen-viewport-height, 100dvh) - var(--fullscreen-keyboard-clearance, 0px) - var(--topBarBlockSize) - 1px));
         position: fixed;
         top: calc(var(--fullscreen-viewport-top, 0px) + var(--topBarBlockSize)) !important;
         bottom: auto;

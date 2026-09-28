@@ -13,7 +13,7 @@ import {
 
 import { humanizedDateTime, favsToHotswap, getMessageTimeStamp, dragElement, isMobile, initRossMods } from './scripts/RossAscends-mods.js';
 import { userStatsHandler, statMesProcess, initStats } from './scripts/stats.js';
-import { initFullscreenViewport } from './scripts/fullscreen-viewport.js';
+import { initFullscreenViewport, getFullscreenKeyboardClearance, setFullscreenKeyboardClearance } from './scripts/fullscreen-viewport.js';
 import { initFullscreenResume } from './scripts/fullscreen-resume.js';
 import { getFullscreenDiagnostics } from './scripts/fullscreen-diagnostics.js';
 import {
@@ -836,6 +836,55 @@ async function showFullscreenDiagnostics() {
         }
     }).appendTo(buttons);
     await callGenericPopup(content, POPUP_TYPE.TEXT, '', { wide: true, allowVerticalScrolling: true });
+}
+
+/** Non-modal controls: changing clearance must not blur the composer. */
+function showFullscreenKeyboardAdjustment() {
+    if (document.getElementById('fullscreen_keyboard_adjustment')) return;
+    if (document.fullscreenElement !== document.documentElement) {
+        toastr.info(t`Enter fullscreen first, then adjust keyboard clearance.`);
+        return;
+    }
+    const panel = $('<div>', { id: 'fullscreen_keyboard_adjustment', role: 'region', 'aria-label': t`Keyboard clearance` });
+    $('<div>').text(t`Tap the message box, then raise it until it clears the keyboard.`).appendTo(panel);
+    const value = $('<output>', { 'aria-live': 'polite' }).appendTo(panel);
+    const buttons = $('<div>', { class: 'flex-container' }).appendTo(panel);
+    function refresh() {
+        value.text(t`Keyboard clearance: ${getFullscreenKeyboardClearance()}px`);
+    }
+    function close() {
+        panel.remove();
+        document.removeEventListener('fullscreenchange', onFullscreenChange);
+        window.removeEventListener('resize', refresh);
+    }
+    function onFullscreenChange() {
+        if (document.fullscreenElement !== document.documentElement) close();
+    }
+    function addButton(label, action) {
+        const button = $('<button>', { type: 'button', class: 'menu_button' }).text(label).appendTo(buttons);
+        // Cancel pointer focus changes, but keep keyboard activation accessible.
+        button.on('pointerdown', event => event.preventDefault());
+        button.on('pointerup', event => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            action();
+        });
+        button.on('click', event => {
+            if (event.detail === 0) action();
+        });
+    }
+    function adjust(delta) {
+        setFullscreenKeyboardClearance(getFullscreenKeyboardClearance() + delta);
+        refresh();
+    }
+    addButton(t`Raise`, () => adjust(4));
+    addButton(t`Lower`, () => adjust(-4));
+    addButton(t`Zero`, () => { setFullscreenKeyboardClearance(0); refresh(); });
+    addButton(t`Done`, close);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    window.addEventListener('resize', refresh);
+    refresh();
+    panel.appendTo(document.body);
 }
 
 /**
@@ -11411,6 +11460,12 @@ jQuery(async function () {
         if (id === 'option_fullscreen_diagnostics') {
             hideMenu();
             await showFullscreenDiagnostics();
+            return;
+        }
+
+        if (id === 'option_fullscreen_keyboard') {
+            hideMenu();
+            showFullscreenKeyboardAdjustment();
             return;
         }
 
