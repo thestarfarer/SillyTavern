@@ -1,23 +1,34 @@
-/**
- * Restore fullscreen after the browser drops it while the app is backgrounded.
- * Browsers may require a new user gesture, so retry on the next real page click.
- * Returns an intent setter for the explicit fullscreen menu action.
- */
+import { recordFullscreenEvent } from './fullscreen-diagnostics.js';
+
+/** Restore browser-dropped fullscreen on a fresh interaction after app return. */
 export function initFullscreenResume() {
     const root = document.documentElement;
     let wanted = document.fullscreenElement === root;
     let backgrounded = false;
-    let blurred = false;
     let requesting = false;
     let revision = 0;
+    let exitTimer;
+
+    function cancelExitTimer() {
+        clearTimeout(exitTimer);
+        exitTimer = undefined;
+    }
 
     function setIntent(value = false) {
+        cancelExitTimer();
         wanted = value;
         backgrounded = false;
         revision++;
+        recordFullscreenEvent('intent', { wanted });
     }
 
-    async function restore() {
+    function markBackground() {
+        cancelExitTimer();
+        backgrounded = wanted;
+        recordFullscreenEvent('background', { wanted, backgrounded });
+    }
+
+    async function restore(source) {
         if (document.hidden) return;
         if (document.fullscreenElement === root) {
             backgrounded = false;
@@ -28,55 +39,85 @@ export function initFullscreenResume() {
             setIntent(false);
             return;
         }
+        // Do not start an inevitably denied request that could occupy the next
+        // touch gesture. Older browsers without this API may still try on return.
+        if (navigator.userActivation?.isActive === false) return;
         const attempt = revision;
         requesting = true;
+        recordFullscreenEvent('restore-request', { source });
         try {
             await root.requestFullscreen();
-            // An explicit exit may have arrived while the browser was entering.
+            // The menu or Escape may have cancelled an in-flight request.
             if (attempt !== revision && !wanted && document.fullscreenElement === root) {
                 await document.exitFullscreen();
             }
-        } catch {
-            // A denied automatic request is expected without user activation.
-            // Keep the intent and retry from a click; don't repeatedly toast.
+            recordFullscreenEvent('restore-result', { source });
+        } catch (error) {
+            recordFullscreenEvent('restore-rejected', { source, name: error.name, message: error.message });
+            console.debug('[Fullscreen] Restore rejected:', source, error.name, error.message);
+            // Keep intent for the next trusted gesture, without repeated toasts.
         } finally {
             requesting = false;
         }
     }
 
     document.addEventListener('fullscreenchange', () => {
+        recordFullscreenEvent('fullscreenchange');
+        cancelExitTimer();
         if (document.fullscreenElement === root) {
-            // Do not turn a cancelled, still-resolving restore into new intent.
             if (!requesting || wanted) {
                 wanted = true;
                 backgrounded = false;
             }
-        } else if (document.fullscreenElement || (!document.hidden && !blurred && !backgrounded)) {
+        } else if (document.fullscreenElement) {
             setIntent(false);
+        } else if (document.hidden) {
+            markBackground();
+        } else if (wanted && !backgrounded) {
+            // Gecko can deliver fullscreen loss BEFORE visibilitychange. Allow
+            // that notification to arrive, but never restore from this grace
+            // period alone: Back/browser UI exits must remain exits.
+            exitTimer = setTimeout(() => {
+                if (document.hidden) markBackground();
+                else setIntent(false);
+            }, 1500);
         }
     });
 
-    window.addEventListener('blur', () => { blurred = true; });
+    window.addEventListener('blur', () => recordFullscreenEvent('blur'));
     window.addEventListener('focus', () => {
-        blurred = false;
-        if (!backgrounded && !document.fullscreenElement) setIntent(false);
-        void restore();
+        recordFullscreenEvent('focus');
+        void restore('focus');
+    });
+    window.addEventListener('pagehide', markBackground);
+    window.addEventListener('pageshow', () => {
+        recordFullscreenEvent('pageshow');
+        void restore('pageshow');
     });
     document.addEventListener('visibilitychange', () => {
-        if (document.hidden) {
-            backgrounded = wanted;
-        } else {
-            void restore();
-        }
+        recordFullscreenEvent('visibilitychange');
+        if (document.hidden) markBackground();
+        else void restore('visibilitychange');
     });
-    document.addEventListener('click', event => {
-        // Let the explicit menu action decide, without racing its own request.
-        if (event.target instanceof Element && event.target.closest('#option_fullscreen')) return;
-        void restore();
-    }, true);
-    document.addEventListener('keydown', event => {
-        if (event.key === 'Escape') setIntent(false);
-    }, true);
 
+    function onInteraction(event) {
+        if (!event.isTrusted) return;
+        if (event.type === 'keydown' && event.key === 'Escape') {
+            setIntent(false);
+            return;
+        }
+        if (event.type === 'pointerup' && event.pointerType === 'mouse') return;
+        if (wanted && (backgrounded || exitTimer !== undefined)) recordFullscreenEvent(event.type);
+        // A real foreground interaction after an unclassified exit confirms
+        // that it was not an app switch. Respect that exit immediately.
+        if (exitTimer !== undefined && !backgrounded) setIntent(false);
+        // The menu action owns its request; don't race it on touchend/click.
+        if (event.target instanceof Element && event.target.closest('#option_fullscreen, #option_fullscreen_diagnostics')) return;
+        void restore(event.type);
+    }
+
+    for (const type of ['pointerup', 'touchend', 'click', 'keydown']) {
+        document.addEventListener(type, onInteraction, { capture: true, passive: true });
+    }
     return setIntent;
 }
