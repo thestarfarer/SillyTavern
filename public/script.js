@@ -771,6 +771,42 @@ export function displayOnlineStatus() {
     }
 }
 
+/** Keep the menu in sync when fullscreen is exited with Back, Escape or browser UI. */
+function updateFullscreenButton() {
+    const active = Boolean(document.fullscreenElement);
+    const supported = active || (document.fullscreenEnabled !== false
+        && typeof document.documentElement.requestFullscreen === 'function');
+    const label = active ? t`Exit fullscreen` : t`Fullscreen`;
+    const item = $('#option_fullscreen');
+    item.attr({
+        'aria-pressed': String(active),
+        'aria-disabled': String(!supported),
+        title: supported ? label : t`Fullscreen is not available in this browser.`,
+    });
+    item.find('span').attr('data-i18n', active ? 'Exit fullscreen' : 'Fullscreen').text(label);
+    item.find('i').toggleClass('fa-expand', !active).toggleClass('fa-compress', active);
+}
+
+/** Called directly from a click, retaining the user activation required on mobile. */
+async function toggleFullscreen() {
+    try {
+        if (document.fullscreenElement) {
+            await document.exitFullscreen();
+        } else if (document.fullscreenEnabled === false || typeof document.documentElement.requestFullscreen !== 'function') {
+            toastr.warning(t`Fullscreen is not available in this browser.`);
+        } else {
+            // Use the entire document so menus and dialogs remain accessible.
+            // Firefox/Iceraven supports this without Chrome-specific options.
+            await document.documentElement.requestFullscreen();
+        }
+    } catch (error) {
+        console.warn('Could not change fullscreen mode:', error);
+        toastr.warning(t`The browser could not change fullscreen mode. Try tapping Fullscreen again.`);
+    } finally {
+        updateFullscreenButton();
+    }
+}
+
 /**
  * Sets the duration of JS animations.
  * @param {number} ms Duration in milliseconds. Resets to default if null.
@@ -11285,6 +11321,7 @@ jQuery(async function () {
 
     function showMenu() {
         showBookmarksButtons();
+        updateFullscreenButton();
         menu.fadeIn(animation_duration);
         optionsPopper.update();
         isOptionsMenuVisible = true;
@@ -11299,6 +11336,12 @@ jQuery(async function () {
     function isMouseOverButtonOrMenu() {
         return menu.is(':hover, :focus-within') || button.is(':hover, :focus');
     }
+
+    document.addEventListener('fullscreenchange', () => {
+        updateFullscreenButton();
+        optionsPopper.update();
+    });
+    updateFullscreenButton();
 
     button.on('click', function () {
         if (isOptionsMenuVisible) {
@@ -11325,6 +11368,12 @@ jQuery(async function () {
             ...args,
             ...(additionalPrompt !== undefined && { quiet_prompt: additionalPrompt, quietToLoud: true }),
         });
+
+        if (id === 'option_fullscreen') {
+            hideMenu();
+            await toggleFullscreen();
+            return;
+        }
 
         if (id == 'option_select_chat') {
             if (this_chid === undefined && !is_send_press && !selected_group) {
