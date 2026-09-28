@@ -13,6 +13,8 @@ import {
 
 import { humanizedDateTime, favsToHotswap, getMessageTimeStamp, dragElement, isMobile, initRossMods } from './scripts/RossAscends-mods.js';
 import { userStatsHandler, statMesProcess, initStats } from './scripts/stats.js';
+import { initFullscreenViewport } from './scripts/fullscreen-viewport.js';
+import { initFullscreenResume } from './scripts/fullscreen-resume.js';
 import {
     generateKoboldWithStreaming,
     kai_settings,
@@ -771,6 +773,8 @@ export function displayOnlineStatus() {
     }
 }
 
+let setFullscreenIntent = (_wanted) => {};
+
 /** Keep the menu in sync when fullscreen is exited with Back, Escape or browser UI. */
 function updateFullscreenButton() {
     const active = Boolean(document.fullscreenElement);
@@ -789,10 +793,12 @@ function updateFullscreenButton() {
 
 /** Called directly from a click, retaining the user activation required on mobile. */
 async function toggleFullscreen() {
+    setFullscreenIntent(!document.fullscreenElement);
     try {
         if (document.fullscreenElement) {
             await document.exitFullscreen();
         } else if (document.fullscreenEnabled === false || typeof document.documentElement.requestFullscreen !== 'function') {
+            setFullscreenIntent(false);
             toastr.warning(t`Fullscreen is not available in this browser.`);
         } else {
             // Use the entire document so menus and dialogs remain accessible.
@@ -800,6 +806,7 @@ async function toggleFullscreen() {
             await document.documentElement.requestFullscreen();
         }
     } catch (error) {
+        setFullscreenIntent(Boolean(document.fullscreenElement));
         console.warn('Could not change fullscreen mode:', error);
         toastr.warning(t`The browser could not change fullscreen mode. Try tapping Fullscreen again.`);
     } finally {
@@ -11337,6 +11344,8 @@ jQuery(async function () {
         return menu.is(':hover, :focus-within') || button.is(':hover, :focus');
     }
 
+    initFullscreenViewport();
+    setFullscreenIntent = initFullscreenResume();
     document.addEventListener('fullscreenchange', () => {
         updateFullscreenButton();
         optionsPopper.update();
