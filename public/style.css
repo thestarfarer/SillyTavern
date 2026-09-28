@@ -139,6 +139,34 @@
     text-shadow: 0px 0px calc(var(--shadowWidth) * 1px) var(--SmartThemeShadowColor);
 }
 
+#fullscreen_keyboard_adjustment {
+    position: fixed;
+    top: calc(var(--topBarBlockSize) + 8px);
+    left: 8px;
+    width: min(360px, calc(100vw - 16px));
+    padding: 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    background: var(--SmartThemeBlurTintColor);
+    backdrop-filter: blur(16px);
+    color: var(--SmartThemeBodyColor);
+    z-index: 10000;
+    font-size: 14px;
+}
+
+#fullscreen_keyboard_adjustment output {
+    display: block;
+    margin: 6px 0;
+}
+
+#fullscreen_keyboard_adjustment button {
+    flex: 1;
+    margin: 0;
+    min-height: 40px;
+    white-space: nowrap;
+    touch-action: manipulation;
+}
+
 html {
     /*fix for chrome flickering on blurred divs*/
     -webkit-transform: translateZ(0);

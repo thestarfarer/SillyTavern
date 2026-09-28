@@ -21,6 +21,7 @@ function snapshot() {
         viewport: viewport ? { height: viewport.height, top: viewport.offsetTop, scale: viewport.scale } : null,
         appliedHeight: root.style.getPropertyValue('--fullscreen-viewport-height'),
         appliedTop: root.style.getPropertyValue('--fullscreen-viewport-top'),
+        keyboardClearance: root.style.getPropertyValue('--fullscreen-keyboard-clearance'),
         chat: bounds('sheld'),
         form: bounds('form_sheld'),
         input: bounds('send_textarea'),
