@@ -1,11 +1,11 @@
-/**
- * Track the visible area separately from CSS viewport units: in fullscreen the
- * Android keyboard may resize/pan the visual viewport without resizing 100dvh.
- */
+import { recordFullscreenEvent } from './fullscreen-diagnostics.js';
+
+/** Follow the visible viewport, including delayed Android keyboard resizing. */
 export function initFullscreenViewport() {
     const root = document.documentElement;
     const viewport = window.visualViewport;
     let frame = null;
+    let settleTimers = [];
 
     function update() {
         frame = null;
@@ -20,21 +20,37 @@ export function initFullscreenViewport() {
         const windowHeight = window.innerHeight;
         const height = Math.min(windowHeight, viewport?.height || windowHeight);
         if (!(height > 0)) return;
-        const top = Math.max(0, Math.min(viewport?.offsetTop || 0, windowHeight - height));
+        // Panning is independent of resizing. In particular, a nonzero offset
+        // can be valid even when innerHeight equals visualViewport.height.
+        const top = Math.max(0, viewport?.offsetTop || 0);
         root.style.setProperty('--fullscreen-viewport-height', `${height}px`);
         root.style.setProperty('--fullscreen-viewport-top', `${top}px`);
+        recordFullscreenEvent('viewport-applied');
     }
 
     function schedule() {
         if (frame === null) frame = window.requestAnimationFrame(update);
     }
 
+    function settle(event) {
+        recordFullscreenEvent(event.type);
+        settleTimers.forEach(clearTimeout);
+        settleTimers = [];
+        schedule();
+        // Focus/fullscreen events may precede native keyboard animations, and
+        // some Gecko versions miss the final resize. Recheck briefly, not forever.
+        if (!document.hidden) {
+            settleTimers = [100, 300, 600, 1000].map(delay => setTimeout(schedule, delay));
+        }
+    }
+
     viewport?.addEventListener('resize', schedule);
     viewport?.addEventListener('scroll', schedule);
-    window.addEventListener('resize', schedule);
-    window.addEventListener('pageshow', schedule);
-    document.addEventListener('fullscreenchange', schedule);
-    document.addEventListener('focusin', schedule);
-    document.addEventListener('focusout', schedule);
+    window.addEventListener('resize', settle);
+    window.addEventListener('pageshow', settle);
+    document.addEventListener('visibilitychange', settle);
+    document.addEventListener('fullscreenchange', settle);
+    document.addEventListener('focusin', settle);
+    document.addEventListener('focusout', settle);
     update();
 }

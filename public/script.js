@@ -15,6 +15,7 @@ import { humanizedDateTime, favsToHotswap, getMessageTimeStamp, dragElement, isM
 import { userStatsHandler, statMesProcess, initStats } from './scripts/stats.js';
 import { initFullscreenViewport } from './scripts/fullscreen-viewport.js';
 import { initFullscreenResume } from './scripts/fullscreen-resume.js';
+import { getFullscreenDiagnostics } from './scripts/fullscreen-diagnostics.js';
 import {
     generateKoboldWithStreaming,
     kai_settings,
@@ -812,6 +813,29 @@ async function toggleFullscreen() {
     } finally {
         updateFullscreenButton();
     }
+}
+
+/** Share viewport measurements without including any chat or account data. */
+async function showFullscreenDiagnostics() {
+    const content = $('<div>');
+    $('<h3>').text(t`Fullscreen diagnostics`).appendTo(content);
+    $('<p>').text(t`After reproducing the problem, copy this report. It contains browser, viewport and fullscreen events, without chat text or credentials.`).appendTo(content);
+    const report = $('<textarea>', { class: 'text_pole', rows: 12, readonly: true, 'aria-label': t`Fullscreen diagnostic report` })
+        .css({ width: '100%', 'box-sizing': 'border-box' }).val(getFullscreenDiagnostics()).appendTo(content);
+    const buttons = $('<div>', { class: 'flex-container' }).appendTo(content);
+    $('<button>', { type: 'button', class: 'menu_button' }).text(t`Refresh`).on('click', () => {
+        report.val(getFullscreenDiagnostics());
+    }).appendTo(buttons);
+    $('<button>', { type: 'button', class: 'menu_button' }).text(t`Copy report`).on('click', async () => {
+        try {
+            await copyText(String(report.val()));
+            toastr.success(t`Report copied.`);
+        } catch {
+            report.trigger('select');
+            toastr.info(t`Select and copy the report manually.`);
+        }
+    }).appendTo(buttons);
+    await callGenericPopup(content, POPUP_TYPE.TEXT, '', { wide: true, allowVerticalScrolling: true });
 }
 
 /**
@@ -11381,6 +11405,12 @@ jQuery(async function () {
         if (id === 'option_fullscreen') {
             hideMenu();
             await toggleFullscreen();
+            return;
+        }
+
+        if (id === 'option_fullscreen_diagnostics') {
+            hideMenu();
+            await showFullscreenDiagnostics();
             return;
         }
 
