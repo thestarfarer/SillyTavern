@@ -578,3 +578,40 @@
         height: unset;
     }
 }
+
+/* Fullscreen keyboards can cover part of 100dvh. Use the visible viewport for
+   the chat and keep the complete composer inside it, including browser panning. */
+@media screen and (max-width: 1000px) {
+    html:fullscreen #sheld {
+        --fullscreen-chat-height: max(0px, calc(var(--fullscreen-viewport-height, 100dvh) - var(--topBarBlockSize) - 1px));
+        position: fixed;
+        top: calc(var(--fullscreen-viewport-top, 0px) + var(--topBarBlockSize)) !important;
+        bottom: auto;
+        height: var(--fullscreen-chat-height) !important;
+        max-height: var(--fullscreen-chat-height) !important;
+        min-height: 0;
+    }
+
+    html:fullscreen #top-bar,
+    html:fullscreen #top-settings-holder {
+        top: var(--fullscreen-viewport-top, 0px);
+    }
+
+    html:fullscreen #chat {
+        flex: 1 1 0;
+        min-height: 0;
+        max-height: 100%;
+    }
+
+    html:fullscreen #form_sheld {
+        flex-shrink: 0;
+    }
+
+    html:fullscreen #send_textarea {
+        max-height: calc(var(--fullscreen-viewport-height, 100dvh) * 0.4);
+    }
+
+    html:fullscreen #options .options-content {
+        max-height: max(80px, calc(var(--fullscreen-viewport-height, 100dvh) - 2 * var(--bottomFormBlockSize) - 10px));
+    }
+}
