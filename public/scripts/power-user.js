@@ -145,6 +145,7 @@ export const power_user = {
     stream_fade_in: false,
 
     fast_ui_mode: true,
+    submarine_ui: true,
     avatar_style: avatar_styles.ROUND,
     chat_display: chat_styles.DEFAULT,
     toastr_position: defaultToastPosition,
@@ -1703,6 +1704,8 @@ export async function loadPowerUserSettings(settings, data) {
     $('#disable_group_trimming').prop('checked', power_user.disable_group_trimming);
     $('#markdown_escape_strings').val(power_user.markdown_escape_strings);
     $('#fast_ui_mode').prop('checked', power_user.fast_ui_mode);
+    $('#submarine_ui').prop('checked', power_user.submarine_ui);
+    document.body.classList.toggle('submarine-ui', power_user.submarine_ui);
     $('#waifuMode').prop('checked', power_user.waifuMode);
     $('#movingUImode').prop('checked', power_user.movingUI);
     $('#noShadowsmode').prop('checked', power_user.noShadows);
@@ -3500,6 +3503,12 @@ jQuery(() => {
     $('#waifuMode').on('change', () => {
         power_user.waifuMode = !!$('#waifuMode').prop('checked');
         switchWaifuMode();
+        saveSettingsDebounced();
+    });
+
+    $('#submarine_ui').on('change', function () {
+        power_user.submarine_ui = $(this).prop('checked');
+        document.body.classList.toggle('submarine-ui', power_user.submarine_ui);
         saveSettingsDebounced();
     });
 

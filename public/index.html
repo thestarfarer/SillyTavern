@@ -43,6 +43,7 @@
     <link rel="stylesheet" type="text/css" href="css/select2-overrides.css">
     <link rel="stylesheet" type="text/css" href="css/mobile-styles.css">
     <link rel="stylesheet" type="text/css" href="css/macros.css">
+    <link rel="stylesheet" type="text/css" href="css/submarine.css">
     <link rel="stylesheet" type="text/css" href="css/user.css">
     <link rel="icon" type="image/x-icon" href="favicon.ico">
     <!-- Scripts are loaded at the end of the body to improve page load speed -->
@@ -5141,6 +5142,11 @@
                             <div name="themeToggles">
                                 <!-- <h4 data-i18n="Theme Toggles">Theme Toggles</h4> -->
 
+                                <label for="submarine_ui" class="checkbox_label" title="Use the submarine control-room appearance. Turn off to reveal your selected theme." data-i18n="[title]Use the submarine control-room appearance. Turn off to reveal your selected theme.">
+                                    <input id="submarine_ui" type="checkbox" />
+                                    <small data-i18n="Submarine Interface">Submarine Interface</small>
+                                </label>
+
                                 <label for="reduced_motion" class="checkbox_label" title="Disable animations and transitions" data-i18n="[title]Disables animations and transitions">
                                     <input id="reduced_motion" type="checkbox" />
                                     <small data-i18n="Reduced Motion">Reduced Motion</small>
@@ -8090,6 +8096,22 @@
                 <div id="dialogue_del_mes_cancel" data-i18n="Cancel" class="menu_button">Cancel</div>
             </div>
             <div id="send_form" class="no-connection">
+                <div class="submarine-comms">
+                    <span class="submarine-station" data-i18n="Communications">Communications</span>
+                    <span class="submarine-link">
+                        <span class="online_status_indicator" aria-hidden="true"></span>
+                        <span class="online_status_text" data-i18n="Not connected">Not connected</span>
+                    </span>
+                    <span class="submarine-activity">
+                        <svg class="submarine-meter" viewBox="0 0 40 24" aria-hidden="true" focusable="false">
+                            <path class="submarine-meter-scale" d="M4 21a16 16 0 0 1 32 0M7 13l3 2m10-10v4m13 4-3 2" />
+                            <path class="submarine-meter-needle" d="M20 21V8" />
+                            <circle cx="20" cy="21" r="2" />
+                        </svg>
+                        <span class="submarine-idle" data-i18n="Standby">Standby</span>
+                        <span class="submarine-receiving" data-i18n="Receiving">Receiving</span>
+                    </span>
+                </div>
                 <form id="file_form" class="wide100p displayNone">
                     <div class="file_attached">
                         <input id="file_form_input" type="file" multiple hidden>

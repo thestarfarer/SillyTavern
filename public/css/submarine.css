@@ -1,0 +1,358 @@
+/* Experimental control-room appearance. All overrides are opt-out and scoped;
+   the user's underlying theme, layout, backgrounds and fonts remain saved. */
+.submarine-comms {
+    display: none;
+}
+
+body.submarine-ui {
+    --sub-steel: #202a29;
+    --sub-well: #101a19;
+    --sub-line: #46504a;
+    --sub-brass: #bca77a;
+    --sub-muted: #a6afa4;
+    --sub-green: #94cda0;
+    --sub-amber: #dab477;
+    --SmartThemeBodyColor: #e0dfcf;
+    --SmartThemeEmColor: #adb8aa;
+    --SmartThemeUnderlineColor: #b9cdb7;
+    --SmartThemeQuoteColor: #d2ba85;
+    --SmartThemeBlurTintColor: #1c2624;
+    --SmartThemeChatTintColor: #151e1c;
+    --SmartThemeUserMesBlurTintColor: #202b27;
+    --SmartThemeBotMesBlurTintColor: #18211e;
+    --SmartThemeShadowColor: transparent;
+    --SmartThemeBorderColor: #46504a;
+    --interactable-outline-color: #d2ba85;
+    --interactable-outline-color-faint: #bca77a;
+    color: var(--SmartThemeBodyColor);
+    background-color: #111b1a;
+    accent-color: var(--sub-brass);
+    scrollbar-color: #60695b #131d1b;
+}
+
+/* A hull plate overlay leaves the chosen background intact underneath. */
+body.submarine-ui #bg1::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+        radial-gradient(circle at 10px 10px, #747b6638 2px, #050c0c80 3px, transparent 4px) 0 0 / 160px 160px,
+        repeating-linear-gradient(90deg, transparent 0 159px, #050c0c60 159px 160px),
+        repeating-linear-gradient(0deg, transparent 0 159px, #050c0c60 159px 160px),
+        linear-gradient(115deg, #182522f2, #0d1917e8);
+}
+
+body.submarine-ui #top-bar {
+    background: linear-gradient(#35403a, #232e29 55%, #1b2521);
+    border: 1px solid #64705b;
+    border-top: 3px solid #78816c;
+    border-bottom-color: #0a100e;
+    box-shadow: 0 3px 0 #080e0c, 0 6px 22px #0007;
+}
+
+body.submarine-ui #top-settings-holder > .drawer {
+    border-inline-end: 1px solid #111b1670;
+    box-shadow: 1px 0 #a8af8520;
+}
+
+body.submarine-ui #top-settings-holder .drawer-icon {
+    color: #c2c8ae;
+    opacity: 0.85;
+    filter: none;
+    text-shadow: 0 2px 1px #050a08;
+    transition: color 150ms, opacity 150ms;
+}
+
+body.submarine-ui #top-settings-holder .drawer-icon:is(:hover, .openIcon) {
+    color: var(--sub-amber);
+    opacity: 1;
+}
+
+body.submarine-ui #sheld {
+    border-inline: 1px solid #55604e;
+    box-shadow: 0 0 0 4px #101914, 0 0 45px #0006;
+}
+
+body.submarine-ui #chat {
+    min-height: 0;
+    background: var(--SmartThemeChatTintColor);
+    text-shadow: none;
+    scrollbar-gutter: stable;
+}
+
+body.submarine-ui #chat .mes:not(.selected) {
+    border-bottom: 1px solid #76826924;
+}
+
+body.submarine-ui #chat .mes[is_user="true"]:not(.selected) {
+    background-color: #8595750a;
+}
+
+body.submarine-ui .mes .name_text {
+    color: #d9c99e;
+    letter-spacing: 0.025em;
+}
+
+body.submarine-ui .mes .timestamp {
+    color: var(--sub-muted);
+    font-family: 'Noto Sans Mono', monospace;
+    font-size: 0.65em;
+}
+
+body.submarine-ui .mes_text {
+    line-height: 1.65;
+}
+
+body.submarine-ui .mes .avatar img {
+    box-shadow: 0 0 0 1px #0b130f, 0 0 0 3px #78816c66;
+}
+
+body.submarine-ui .mes_reasoning_header {
+    border: 1px solid var(--sub-line);
+    border-radius: 4px;
+    background: #28322a;
+    color: var(--sub-muted);
+}
+
+body.submarine-ui #send_form {
+    border: 1px solid #6c745d;
+    border-top: 3px solid #93977a;
+    border-radius: 3px 3px 10px 10px;
+    background: linear-gradient(#303b32, #202b24);
+    box-shadow: inset 0 1px #e3dfba20, 0 -4px 18px #0004;
+}
+
+body.submarine-ui .submarine-comms {
+    display: flex;
+    order: -1;
+    width: 100%;
+    min-width: 0;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 12px;
+    border-bottom: 1px solid #090f0b;
+    box-shadow: 0 1px #c9d0a217;
+    font-family: 'Noto Sans Mono', monospace;
+    font-size: 10px;
+    line-height: 1.4;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--sub-brass);
+}
+
+body.submarine-ui .submarine-station {
+    flex-shrink: 0;
+    font-weight: 600;
+}
+
+body.submarine-ui .submarine-link {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    flex: 1;
+    color: var(--sub-muted);
+}
+
+body.submarine-ui .submarine-link .online_status_text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.submarine-ui .online_status_indicator {
+    width: 9px;
+    height: 9px;
+    flex-shrink: 0;
+    border: 1px solid #0a100c;
+    background: #cc826a;
+    box-shadow: 0 0 0 2px #080e0a80, inset 0 1px 2px #fff5;
+}
+
+body.submarine-ui .online_status_indicator.success {
+    background: var(--sub-green);
+    box-shadow: 0 0 0 2px #080e0a80, 0 0 8px #94cda047, inset 0 1px 2px #fff9;
+}
+
+body.submarine-ui .submarine-activity {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    color: var(--sub-muted);
+}
+
+body.submarine-ui .submarine-meter {
+    width: 30px;
+    height: 18px;
+    fill: currentColor;
+}
+
+body.submarine-ui .submarine-meter path {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+}
+
+body.submarine-ui .submarine-meter-needle {
+    transform-origin: 20px 21px;
+    transform: rotate(-55deg);
+}
+
+body.submarine-ui .submarine-receiving {
+    display: none;
+}
+
+/* The real stop-button visibility drives this instrument, including image jobs. */
+body.submarine-ui #send_form:has(#mes_stop[style*="display: flex"]) .submarine-idle {
+    display: none;
+}
+
+body.submarine-ui #send_form:has(#mes_stop[style*="display: flex"]) .submarine-receiving {
+    display: inline;
+}
+
+body.submarine-ui #send_form:has(#mes_stop[style*="display: flex"]) .submarine-activity {
+    color: var(--sub-amber);
+}
+
+body.submarine-ui #send_form:has(#mes_stop[style*="display: flex"]) .submarine-meter-needle {
+    animation: submarine-receiving 1.8s ease-in-out infinite alternate;
+}
+
+body.submarine-ui #nonQRFormItems {
+    padding: 6px;
+    gap: 6px;
+}
+
+body.submarine-ui #send_textarea {
+    min-width: 0;
+    border-radius: 4px;
+    background-color: #0e1914;
+    box-shadow: inset 0 1px 5px #0006, 0 1px #e1e6ad19;
+    padding-inline: 10px;
+}
+
+body.submarine-ui :is(#options_button, #extensionsMenuButton, #chat_provider_toggle, #send_but, #mes_continue) {
+    color: #d2c5a0;
+    border-radius: 5px;
+    opacity: 0.9;
+    font-size: calc(var(--bottomFormIconSize) * 0.82);
+}
+
+body.submarine-ui #send_but {
+    color: #b9d6af;
+    background: linear-gradient(#3e5140, #26372b);
+    box-shadow: inset 0 0 0 1px #80957155, inset 0 2px #c0dbaa24, 0 2px 2px #0006;
+}
+
+body.submarine-ui #chat_provider_toggle {
+    box-shadow: inset 0 0 0 1px #a6aa8140;
+    background: #0c181040;
+}
+
+body.submarine-ui #chat_provider_toggle.provider-switch-pending {
+    color: var(--sub-amber);
+}
+
+body.submarine-ui #send_form .mes_stop {
+    color: #e8ad80;
+}
+
+/* Equipment panels, menus and dialogs share the same gasket and metal trim. */
+body.submarine-ui :is(.drawer-content, #options, #extensionsMenu, #chat_model_picker, .popup:not(:has(#loader))) {
+    border: 1px solid #737c65;
+    border-radius: 7px;
+    background: linear-gradient(130deg, #29342c, #1b2721 65%);
+    box-shadow: inset 0 0 0 3px #101b1560, 0 5px 25px #0008;
+}
+
+body.submarine-ui :is(.drawer-content h3, .drawer-content h4, .chat_model_picker_heading) {
+    color: #d8c79c;
+}
+
+body.submarine-ui .inline-drawer-header {
+    border-bottom: 1px solid #74836640;
+}
+
+body.submarine-ui :is(.text_pole, select, textarea:not(#send_textarea)) {
+    border-color: #55624e;
+    border-radius: 4px;
+    background-color: #111d16;
+    color: var(--SmartThemeBodyColor);
+}
+
+body.submarine-ui .menu_button:not(.redWarningBG) {
+    border-color: #758063;
+    border-radius: 4px;
+    background-color: #34402d;
+    color: var(--SmartThemeBodyColor);
+}
+
+body.submarine-ui :is(#options a, #extensionsMenu .list-group-item):hover,
+body.submarine-ui #chat_model_picker button:is(:hover, :focus-visible, [aria-checked="true"]) {
+    background-color: #526044;
+    color: #f4edd9;
+}
+
+body.submarine-ui #toast-container > div {
+    border: 1px solid #8e9772;
+    border-radius: 5px;
+    box-shadow: 0 3px 18px #0008;
+    color: #f0edda;
+}
+
+body.submarine-ui #toast-container > .toast-info {
+    background-color: #354937;
+}
+
+body.submarine-ui #toast-container > .toast-success {
+    background-color: #30563b;
+}
+
+body.submarine-ui #toast-container > .toast-warning {
+    background-color: #796039;
+}
+
+body.submarine-ui #toast-container > .toast-error {
+    background-color: #743d32;
+}
+
+@keyframes submarine-receiving {
+    from { transform: rotate(-30deg); }
+    to { transform: rotate(40deg); }
+}
+
+body.submarine-ui.reduced-motion .submarine-meter-needle,
+body.reduced-motion .hatch-handwheel {
+    animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body.submarine-ui .submarine-meter-needle {
+        animation: none !important;
+    }
+}
+
+@media (max-width: 600px) {
+    body.submarine-ui .submarine-comms {
+        gap: 8px;
+        padding: 5px 8px;
+        font-size: 9px;
+    }
+
+    body.submarine-ui .submarine-station {
+        display: none;
+    }
+
+    body.submarine-ui #nonQRFormItems {
+        padding: 4px;
+        gap: 3px;
+    }
+
+    body.submarine-ui #sheld {
+        border-inline: 0;
+    }
+}
