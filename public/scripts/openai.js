@@ -3023,6 +3023,8 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
             throw new Error(message);
         }
 
+        if (data.warning) toastr.warning(data.warning, t`Image reply incomplete`, { escapeHtml: true });
+
         if (type !== 'quiet') {
             const logprobs = parseChatCompletionLogprobs(data);
             // Delay is required to allow the active message to be updated to
@@ -3054,6 +3056,10 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, ov
     const show_thoughts = overrideShowThoughts ?? oai_settings.show_thoughts;
 
     if (chat_completion_source === chat_completion_sources.CLAUDE) {
+        if (data.type === 'sillytavern_warning') {
+            toastr.warning(data.message, t`Image reply incomplete`, { escapeHtml: true });
+            return '';
+        }
         captureClaudeContent(data, state);
         if (data.type === 'sillytavern_images') {
             state.images ??= [];

@@ -56,6 +56,7 @@ import { readSecret, SECRET_KEYS } from '../secrets.js';
 import { getCodexOAuthManager } from '../codex-oauth.js';
 import { sendCodexRequest, sendCodexStatus } from './codex.js';
 import { addClaudeImageTool, sendClaudeImageResponse } from './claude-image-generation.js';
+import { serializeClaudeRequest } from './claude-request-size.js';
 import { getOAuthManager, getOAuthBetaHeader } from '../claude-oauth.js';
 import {
     getTokenizerModel,
@@ -286,6 +287,7 @@ async function sendClaudeRequest(request, response) {
     try {
         const controller = new AbortController();
         response.once('close', () => controller.abort());
+        response.on('error', error => controller.abort(error));
         if (response.destroyed) controller.abort();
         const additionalHeaders = {};
         const betaHeaders = useOAuth
@@ -537,6 +539,8 @@ async function sendClaudeRequest(request, response) {
         if (useOAuth) messagesUrl.searchParams.set('beta', 'true');
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(600000)]);
         const send = async (body = requestBody) => {
+            const payload = await serializeClaudeRequest(body, signal);
+            console.info(`[Claude] Sending ${body === requestBody ? 'initial' : 'continuation'} payload: ${Buffer.byteLength(payload)} bytes`);
             const headers = { ...fetchHeaders };
             if (useOAuth) {
                 headers['x-client-request-id'] = uuidv4();
@@ -544,7 +548,7 @@ async function sendClaudeRequest(request, response) {
             }
             const execute = () => fetch(messagesUrl, {
                 method: 'POST', signal, redirect: 'error',
-                body: JSON.stringify(body), headers,
+                body: payload, headers,
             });
             let upstream = await execute();
             // Retry only a rejected OAuth credential, before forwarding this request.
@@ -563,13 +567,16 @@ async function sendClaudeRequest(request, response) {
         const generateResponse = await send();
 
         if (imageGeneration) {
-            const continueReply = continueAfterImage ? (assistant, results) => send({
-                ...requestBody,
-                messages: [...requestBody.messages, { role: 'assistant', content: assistant.content }, { role: 'user', content: results }],
-                // Keep tool definitions stable for signed thinking and caching, but
-                // finish in text instead of starting another image or extension call.
-                tool_choice: { type: 'none' },
-            }) : null;
+            const continueReply = continueAfterImage ? async (assistant, results) => {
+                const body = {
+                    ...requestBody,
+                    messages: [...requestBody.messages, { role: 'assistant', content: assistant.content }, { role: 'user', content: results }],
+                    // Keep tool definitions stable for signed thinking and caching, but
+                    // finish in text instead of starting another image or extension call.
+                    tool_choice: { type: 'none' },
+                };
+                return send(body);
+            } : null;
             return await sendClaudeImageResponse(generateResponse, response, imageManager, controller, Boolean(request.body.stream), continueReply);
         }
 
@@ -598,7 +605,8 @@ async function sendClaudeRequest(request, response) {
         }
     } catch (error) {
         console.error(color.red(`Error communicating with Claude: ${error}\n${divider}`));
-        if (!response.headersSent) {
+        if (!response.headersSent && !response.destroyed) {
+            if (error.code === 'CLAUDE_REQUEST_TOO_LARGE') return response.status(413).json({ error: { message: error.message } });
             return response.status(500).send({ error: true });
         }
     }

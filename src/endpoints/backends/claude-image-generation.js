@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import { once } from 'node:events';
 import { parseCodexEvents } from './codex.js';
 import { IMAGE_TOOL, IMAGE_TOOL_NAME, buildImageGenerationRequest, generateInlineImage } from './inline-image-generation.js';
 import { captureClaudeContent } from '../../../public/scripts/claude-thinking.js';
@@ -12,19 +11,17 @@ function combinedUsage(first = {}, second = {}) {
     return usage;
 }
 
+function safeErrorMessage(error) {
+    return String(error?.message || error)
+        .replace(/Bearer\s+\S+|sk-[A-Za-z0-9_-]+|rt_[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/gi, '[redacted]')
+        .replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 1000);
+}
+
 /** Return actual image bytes in the tool result, independently of the inline-media setting. */
 async function imageToolResult(call, image) {
     const [, mime, base64] = /^data:(image\/(?:png|jpeg|webp));base64,(.+)$/.exec(image.image_url.url) || [];
     if (!base64) throw new Error('Generated image could not be returned to Claude.');
-    let source = { type: 'base64', media_type: mime, data: base64 };
-    // Keep the displayed original; reduce only oversized copies sent back to Claude.
-    if (Buffer.byteLength(base64, 'base64') > 4 * 1024 * 1024) {
-        const { Jimp, JimpMime } = await import('../../jimp.js');
-        const picture = await Jimp.read(Buffer.from(base64, 'base64'));
-        const scale = Math.min(1, 1568 / Math.max(picture.bitmap.width, picture.bitmap.height));
-        picture.resize({ w: Math.max(1, Math.round(picture.bitmap.width * scale)), h: Math.max(1, Math.round(picture.bitmap.height * scale)) });
-        source = { type: 'base64', media_type: 'image/jpeg', data: (await picture.getBuffer(JimpMime.jpeg, { quality: 85, jpegColorSpace: 'ycbcr' })).toString('base64') };
-    }
+    const source = { type: 'base64', media_type: mime, data: base64 };
     return {
         type: 'tool_result', tool_use_id: call.id,
         content: [
@@ -45,15 +42,36 @@ export function addClaudeImageTool(tools, description = '') {
 export async function sendClaudeImageResponse(upstream, response, manager, controller, streaming, continueReply = null) {
     const requestId = crypto.randomUUID();
     const abort = () => controller.abort();
-    response.on('close', abort);
+    response.once('close', abort);
+    // An async socket write error is an EventEmitter error, not a rejected
+    // fetch. Keep this handler through final flushing/close, including errors
+    // that arrive after this function returns.
+    response.on('error', error => controller.abort(error));
     let heartbeat;
     let continuation;
-    const write = async event => {
+    let warning;
+    const writeRaw = async chunk => {
         controller.signal.throwIfAborted();
-        if (!response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)) {
-            await once(response, 'drain', { signal: controller.signal });
-        }
+        if (response.destroyed || response.writableEnded) throw new Error('Client response is closed.');
+        // The callback observes delayed EPIPE and naturally limits queued data.
+        await new Promise((resolve, reject) => {
+            const onAbort = () => { cleanup(); reject(controller.signal.reason); };
+            const cleanup = () => controller.signal.removeEventListener('abort', onAbort);
+            controller.signal.addEventListener('abort', onAbort, { once: true });
+            try {
+                response.write(chunk, error => {
+                    cleanup();
+                    if (error) { controller.abort(error); reject(error); }
+                    else resolve();
+                });
+            } catch (error) {
+                cleanup();
+                controller.abort(error);
+                reject(error);
+            }
+        });
     };
+    const write = event => writeRaw(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
     const generate = async (calls, onImage) => {
         if (calls.length > 4) throw new Error('At most four images can be generated per response.');
         // Validate every job before making the first billable request.
@@ -62,7 +80,9 @@ export async function sendClaudeImageResponse(upstream, response, manager, contr
             console.info(`[Claude images ${requestId}] Claude called ${IMAGE_TOOL_NAME} (${index + 1}/${jobs.length})`, { prompt: job.prompt, size: job.size });
         }
         if (streaming && jobs.length) heartbeat = setInterval(() => {
-            if (!response.destroyed) response.write(': Generating image\n\n');
+            if (!response.destroyed && !response.writableEnded && !response.writableNeedDrain) {
+                void writeRaw(': Generating image\n\n').catch(abort);
+            }
         }, 15000);
         for (const [index, job] of jobs.entries()) {
             console.info(`[Claude images ${requestId}] Generating image ${index + 1}/${jobs.length} using Codex`);
@@ -74,15 +94,24 @@ export async function sendClaudeImageResponse(upstream, response, manager, contr
     const continueWithImages = async (message, images) => {
         const calls = message.content.filter(block => block.type === 'tool_use');
         if (calls.some(call => call.name !== IMAGE_TOOL_NAME)) throw new Error('Claude returned parallel tools despite single-tool mode. Retry image generation.');
-        const results = await Promise.all(calls.map((call, index) => imageToolResult(call, images[index])));
-        controller.signal.throwIfAborted();
-        console.info(`[Claude images ${requestId}] Returning ${images.length} generated image(s) to Claude for reply continuation`);
-        continuation = await continueReply(message, results);
-        if (!continuation.ok) {
-            const error = await continuation.json().catch(() => null);
-            throw new Error(`Claude image continuation failed (HTTP ${continuation.status}): ${error?.error?.message || 'No error details returned.'}`);
+        try {
+            const results = await Promise.all(calls.map((call, index) => imageToolResult(call, images[index])));
+            controller.signal.throwIfAborted();
+            console.info(`[Claude images ${requestId}] Returning ${images.length} generated image(s) to Claude for reply continuation`);
+            continuation = await continueReply(message, results);
+            if (!continuation.ok) {
+                const error = await continuation.json().catch(() => null);
+                throw new Error(`Claude image continuation failed (HTTP ${continuation.status}): ${error?.error?.message || 'No error details returned.'}`);
+            }
+            return continuation;
+        } catch (error) {
+            controller.signal.throwIfAborted();
+            // Generation has already succeeded. A rejected follow-up must not
+            // discard the original text/images or turn them into a failed turn.
+            warning = `Image generated, but Claude could not continue the reply. ${safeErrorMessage(error)}`;
+            console.warn(`[Claude images ${requestId}] ${warning}`);
+            return null;
         }
-        return continuation;
     };
     try {
         if (response.destroyed) controller.abort();
@@ -105,21 +134,24 @@ export async function sendClaudeImageResponse(upstream, response, manager, contr
             await generate(calls.map(call => JSON.stringify(call.input)), image => { images.push(image); });
             let usage = message.usage;
             if (continueReply && calls.length) {
-                const followup = await (await continueWithImages(message, images)).json();
-                if (followup.error || !Array.isArray(followup.content) || followup.content.some(block => block.type === 'tool_use')) {
-                    throw new Error('Claude returned an invalid image continuation.');
+                const result = await continueWithImages(message, images);
+                const followup = result ? await result.json() : null;
+                if (followup) {
+                    if (followup.error || !Array.isArray(followup.content) || followup.content.some(block => block.type === 'tool_use')) {
+                        throw new Error('Claude returned an invalid image continuation.');
+                    }
+                    if (text && followup.content.some(block => block.type === 'text' && block.text)) content.push({ type: 'text', text: '\n\n' });
+                    content.push(...followup.content);
+                    text = content.filter(block => block.type === 'text').map(block => block.text).join('');
+                    usage = combinedUsage(usage, followup.usage);
+                    console.info(`[Claude images ${requestId}] Claude reply continuation completed`);
                 }
-                if (text && followup.content.some(block => block.type === 'text' && block.text)) content.push({ type: 'text', text: '\n\n' });
-                content.push(...followup.content);
-                text = content.filter(block => block.type === 'text').map(block => block.text).join('');
-                usage = combinedUsage(usage, followup.usage);
-                console.info(`[Claude images ${requestId}] Claude reply continuation completed`);
             }
             if (images.length && !text) {
                 text = 'Generated image.';
                 content.push({ type: 'text', text });
             }
-            return response.json({ choices: [{ message: { content: text, images } }], content, usage });
+            return response.json({ choices: [{ message: { content: text, images } }], content, usage, ...(warning ? { warning } : {}) });
         }
 
         response.setHeader('Content-Type', 'text/event-stream');
@@ -194,6 +226,13 @@ export async function sendClaudeImageResponse(upstream, response, manager, contr
         });
         if (continueReply && calls.size) {
             const followup = await continueWithImages({ content: original.claudeContent.filter(Boolean) }, images);
+            if (!followup) {
+                await write({ type: 'sillytavern_warning', message: warning });
+                if (!hasText) await write({ type: 'sillytavern_images', delta: { images: [], text: 'Generated image.' } });
+                for (const event of finalEvents) await write(event);
+                response.end();
+                return;
+            }
             let followupUsage = {};
             let finished = false;
             let needsSeparator = hasText;
@@ -226,18 +265,21 @@ export async function sendClaudeImageResponse(upstream, response, manager, contr
         response.end();
     } catch (error) {
         if (!controller.signal.aborted && !response.destroyed) {
-            const message = String(error.message)
-                .replace(/Bearer\s+\S+|sk-[A-Za-z0-9_-]+|rt_[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/gi, '[redacted]')
-                .replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 1000);
+            const message = safeErrorMessage(error);
             console.error(`[Claude images ${requestId}] ${message}`);
-            if (response.headersSent) {
-                await write({ type: 'error', error: { message } });
-                response.end();
-            } else response.status(502).json({ error: { message } });
+            try {
+                if (response.headersSent) {
+                    await write({ type: 'error', error: { message } });
+                    response.end();
+                } else response.status(502).json({ error: { message } });
+            } catch {
+                // The peer can disconnect while we are reporting the error.
+                controller.abort();
+                response.destroy();
+            }
         }
     } finally {
         clearInterval(heartbeat);
-        response.removeListener('close', abort);
         upstream.body?.destroy();
         continuation?.body?.destroy();
     }
