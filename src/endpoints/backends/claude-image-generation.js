@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { once } from 'node:events';
 import { parseCodexEvents } from './codex.js';
 import { IMAGE_TOOL, IMAGE_TOOL_NAME, buildImageGenerationRequest, generateInlineImage } from './inline-image-generation.js';
 import { captureClaudeContent } from '../../../public/scripts/claude-thinking.js';
@@ -53,23 +54,12 @@ export async function sendClaudeImageResponse(upstream, response, manager, contr
     const writeRaw = async chunk => {
         controller.signal.throwIfAborted();
         if (response.destroyed || response.writableEnded) throw new Error('Client response is closed.');
-        // The callback observes delayed EPIPE and naturally limits queued data.
-        await new Promise((resolve, reject) => {
-            const onAbort = () => { cleanup(); reject(controller.signal.reason); };
-            const cleanup = () => controller.signal.removeEventListener('abort', onAbort);
-            controller.signal.addEventListener('abort', onAbort, { once: true });
-            try {
-                response.write(chunk, error => {
-                    cleanup();
-                    if (error) { controller.abort(error); reject(error); }
-                    else resolve();
-                });
-            } catch (error) {
-                cleanup();
-                controller.abort(error);
-                reject(error);
-            }
-        });
+        // compression() wraps write() without forwarding callbacks. Waiting for
+        // one deadlocks on the first event when HTTP compression is negotiated.
+        // Use stream backpressure; the response error handler above catches EPIPE.
+        if (!response.write(chunk)) {
+            await once(response, 'drain', { signal: controller.signal });
+        }
     };
     const write = event => writeRaw(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
     const generate = async (calls, onImage) => {
@@ -155,7 +145,8 @@ export async function sendClaudeImageResponse(upstream, response, manager, contr
         }
 
         response.setHeader('Content-Type', 'text/event-stream');
-        response.setHeader('Cache-Control', 'no-cache');
+        // Deliver each SSE event immediately instead of buffering it in a codec.
+        response.setHeader('Cache-Control', 'no-cache, no-transform');
         response.setHeader('X-Accel-Buffering', 'no');
         response.flushHeaders();
         const calls = new Map();
